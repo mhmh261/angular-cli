@@ -11,8 +11,7 @@ import { strings } from '@angular-devkit/core';
 import type { Config, ConfigOptions } from 'karma';
 import { createRequire } from 'module';
 import * as path from 'path';
-import { Observable, from } from 'rxjs';
-import { defaultIfEmpty, switchMap } from 'rxjs/operators';
+import { Observable, defaultIfEmpty, from, switchMap } from 'rxjs';
 import { Configuration } from 'webpack';
 import { ExecutionTransformer } from '../../transforms';
 import { purgeStaleBuildCache } from '../../utils/purge-cache';
@@ -96,7 +95,7 @@ export function execute(
 
       const karmaOptions: KarmaConfigOptions = options.karmaConfig
         ? {}
-        : getBuiltInKarmaConfig(karma, context.workspaceRoot, projectName);
+        : getBuiltInKarmaConfig(context.workspaceRoot, projectName);
 
       karmaOptions.singleRun = singleRun;
 
@@ -134,6 +133,7 @@ export function execute(
       webpackConfig.plugins.push(
         new FindTestsPlugin({
           include: options.include,
+          exclude: options.exclude,
           workspaceRoot: context.workspaceRoot,
           projectSourceRoot: path.join(context.workspaceRoot, sourceRoot),
         }),
@@ -176,7 +176,9 @@ export function execute(
           const karmaStart = karmaServer.start();
 
           // Cleanup, signal Karma to exit.
-          return () => karmaStart.then(() => karmaServer.stop());
+          return () => {
+            void karmaStart.then(() => karmaServer.stop());
+          };
         }),
     ),
     defaultIfEmpty({ success: false }),
@@ -184,7 +186,6 @@ export function execute(
 }
 
 function getBuiltInKarmaConfig(
-  karma: typeof import('karma'),
   workspaceRoot: string,
   projectName: string,
 ): ConfigOptions & Record<string, unknown> {
@@ -195,6 +196,7 @@ function getBuiltInKarmaConfig(
 
   const workspaceRootRequire = createRequire(workspaceRoot + '/');
 
+  // Any changes to the config here need to be synced to: packages/schematics/angular/config/files/karma.conf.js.template
   return {
     basePath: '',
     frameworks: ['jasmine', '@angular-devkit/build-angular'],
@@ -217,11 +219,19 @@ function getBuiltInKarmaConfig(
       reporters: [{ type: 'html' }, { type: 'text-summary' }],
     },
     reporters: ['progress', 'kjhtml'],
-    port: 9876,
-    colors: true,
-    logLevel: karma.constants.LOG_INFO,
-    autoWatch: true,
     browsers: ['Chrome'],
+    customLaunchers: {
+      // Chrome configured to run in a bazel sandbox.
+      // Disable the use of the gpu and `/dev/shm` because it causes Chrome to
+      // crash on some environments.
+      // See:
+      //   https://github.com/puppeteer/puppeteer/blob/v1.0.0/docs/troubleshooting.md#tips
+      //   https://stackoverflow.com/questions/50642308/webdriverexception-unknown-error-devtoolsactiveport-file-doesnt-exist-while-t
+      ChromeHeadlessNoSandbox: {
+        base: 'ChromeHeadless',
+        flags: ['--no-sandbox', '--headless', '--disable-gpu', '--disable-dev-shm-usage'],
+      },
+    },
     restartOnFileChange: true,
   };
 }

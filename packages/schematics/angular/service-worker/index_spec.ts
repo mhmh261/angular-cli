@@ -6,6 +6,7 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
+import { tags } from '@angular-devkit/core';
 import { SchematicTestRunner, UnitTestTree } from '@angular-devkit/schematics/testing';
 import { Schema as ApplicationOptions } from '../application/schema';
 import { Schema as WorkspaceOptions } from '../workspace/schema';
@@ -39,16 +40,12 @@ describe('Service Worker Schematic', () => {
   };
 
   beforeEach(async () => {
-    appTree = await schematicRunner.runSchematicAsync('workspace', workspaceOptions).toPromise();
-    appTree = await schematicRunner
-      .runSchematicAsync('application', appOptions, appTree)
-      .toPromise();
+    appTree = await schematicRunner.runSchematic('workspace', workspaceOptions);
+    appTree = await schematicRunner.runSchematic('application', appOptions, appTree);
   });
 
   it('should add `serviceWorker` option to build target', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const configText = tree.readContent('/angular.json');
     const buildConfig = JSON.parse(configText).projects.bar.architect.build;
 
@@ -56,9 +53,7 @@ describe('Service Worker Schematic', () => {
   });
 
   it('should add the necessary dependency', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const pkgText = tree.readContent('/package.json');
     const pkg = JSON.parse(pkgText);
     const version = pkg.dependencies['@angular/core'];
@@ -66,17 +61,13 @@ describe('Service Worker Schematic', () => {
   });
 
   it('should import ServiceWorkerModule', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const pkgText = tree.readContent('/projects/bar/src/app/app.module.ts');
     expect(pkgText).toMatch(/import \{ ServiceWorkerModule \} from '@angular\/service-worker'/);
   });
 
   it('should add the SW import to the NgModule imports', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const pkgText = tree.readContent('/projects/bar/src/app/app.module.ts');
     expect(pkgText).toMatch(
       new RegExp(
@@ -91,9 +82,7 @@ describe('Service Worker Schematic', () => {
   });
 
   it('should put the ngsw-config.json file in the project root', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const path = '/projects/bar/ngsw-config.json';
     expect(tree.exists(path)).toEqual(true);
 
@@ -116,28 +105,28 @@ describe('Service Worker Schematic', () => {
       ...defaultOptions,
       project: name,
     };
-    const rootAppTree = await schematicRunner
-      .runSchematicAsync('application', rootAppOptions, appTree)
-      .toPromise();
-    const treeInRoot = await schematicRunner
-      .runSchematicAsync('service-worker', rootSWOptions, rootAppTree)
-      .toPromise();
+    const rootAppTree = await schematicRunner.runSchematic('application', rootAppOptions, appTree);
+    const treeInRoot = await schematicRunner.runSchematic(
+      'service-worker',
+      rootSWOptions,
+      rootAppTree,
+    );
     const pkgTextInRoot = treeInRoot.readContent('/ngsw-config.json');
     const configInRoot = JSON.parse(pkgTextInRoot);
     expect(configInRoot.$schema).toBe(`./${pathToNgswConfigSchema}`);
 
-    const treeNotInRoot = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const treeNotInRoot = await schematicRunner.runSchematic(
+      'service-worker',
+      defaultOptions,
+      appTree,
+    );
     const pkgTextNotInRoot = treeNotInRoot.readContent('/projects/bar/ngsw-config.json');
     const configNotInRoot = JSON.parse(pkgTextNotInRoot);
     expect(configNotInRoot.$schema).toBe(`../../${pathToNgswConfigSchema}`);
   });
 
   it('should add root assets RegExp', async () => {
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const pkgText = tree.readContent('/projects/bar/ngsw-config.json');
     const config = JSON.parse(pkgText);
     expect(config.assetGroups[1].resources.files).toContain(
@@ -149,9 +138,7 @@ describe('Service Worker Schematic', () => {
     const config = JSON.parse(appTree.readContent('/angular.json'));
     config.projects.bar.architect.build.options.resourcesOutputPath = 'outDir';
     appTree.overwrite('/angular.json', JSON.stringify(config));
-    const tree = await schematicRunner
-      .runSchematicAsync('service-worker', defaultOptions, appTree)
-      .toPromise();
+    const tree = await schematicRunner.runSchematic('service-worker', defaultOptions, appTree);
     const pkgText = tree.readContent('/projects/bar/ngsw-config.json');
     const ngswConfig = JSON.parse(pkgText);
     expect(ngswConfig.assetGroups[1].resources.files).toContain(
@@ -171,15 +158,63 @@ describe('Service Worker Schematic', () => {
       project: name,
     };
 
-    let tree = await schematicRunner
-      .runSchematicAsync('application', rootAppOptions, appTree)
-      .toPromise();
-    tree = await schematicRunner
-      .runSchematicAsync('service-worker', rootSWOptions, tree)
-      .toPromise();
+    let tree = await schematicRunner.runSchematic('application', rootAppOptions, appTree);
+    tree = await schematicRunner.runSchematic('service-worker', rootSWOptions, tree);
     expect(tree.exists('/ngsw-config.json')).toBe(true);
 
     const { projects } = JSON.parse(tree.readContent('/angular.json'));
     expect(projects.foo.architect.build.options.ngswConfigPath).toBe('ngsw-config.json');
+  });
+
+  describe('standalone', () => {
+    const name = 'buz';
+    const standaloneAppOptions: ApplicationOptions = {
+      ...appOptions,
+      name,
+      standalone: true,
+    };
+    const standaloneSWOptions: ServiceWorkerOptions = {
+      ...defaultOptions,
+      project: name,
+    };
+
+    beforeEach(async () => {
+      appTree = await schematicRunner.runSchematic('application', standaloneAppOptions, appTree);
+    });
+
+    it(`should add the 'provideServiceWorker' to providers`, async () => {
+      const tree = await schematicRunner.runSchematic(
+        'service-worker',
+        standaloneSWOptions,
+        appTree,
+      );
+      const content = tree.readContent('/projects/buz/src/app/app.config.ts');
+      expect(tags.oneLine`${content}`).toContain(tags.oneLine`
+        providers: [provideServiceWorker('ngsw-worker.js', {
+          enabled: !isDevMode(),
+          registrationStrategy: 'registerWhenStable:30000'
+        })]
+      `);
+    });
+
+    it(`should import 'isDevMode' from '@angular/core'`, async () => {
+      const tree = await schematicRunner.runSchematic(
+        'service-worker',
+        standaloneSWOptions,
+        appTree,
+      );
+      const content = tree.readContent('/projects/buz/src/app/app.config.ts');
+      expect(content).toContain(`import { ApplicationConfig, isDevMode } from '@angular/core';`);
+    });
+
+    it(`should import 'provideServiceWorker' from '@angular/service-worker'`, async () => {
+      const tree = await schematicRunner.runSchematic(
+        'service-worker',
+        standaloneSWOptions,
+        appTree,
+      );
+      const content = tree.readContent('/projects/buz/src/app/app.config.ts');
+      expect(content).toContain(`import { provideServiceWorker } from '@angular/service-worker';`);
+    });
   });
 });

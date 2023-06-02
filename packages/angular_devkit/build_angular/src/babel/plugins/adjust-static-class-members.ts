@@ -8,6 +8,7 @@
 
 import { NodePath, PluginObj, PluginPass, types } from '@babel/core';
 import annotateAsPure from '@babel/helper-annotate-as-pure';
+import splitExportDeclaration from '@babel/helper-split-export-declaration';
 
 /**
  * The name of the Typescript decorator helper function created by the TypeScript compiler.
@@ -183,11 +184,17 @@ function analyzeClassSiblings(
 }
 
 /**
- * The set of classed already visited and analyzed during the plugin's execution.
+ * The set of classes already visited and analyzed during the plugin's execution.
  * This is used to prevent adjusted classes from being repeatedly analyzed which can lead
  * to an infinite loop.
  */
 const visitedClasses = new WeakSet<types.Class>();
+
+/**
+ * A map of classes that have already been analyzed during the default export splitting step.
+ * This is used to avoid analyzing a class declaration twice if it is a direct default export.
+ */
+const exportDefaultAnalysis = new WeakMap<types.Class, ReturnType<typeof analyzeClassSiblings>>();
 
 /**
  * A babel plugin factory function for adjusting classes; primarily with Angular metadata.
@@ -198,9 +205,29 @@ const visitedClasses = new WeakSet<types.Class>();
  *
  * @returns A babel plugin object instance.
  */
+// eslint-disable-next-line max-lines-per-function
 export default function (): PluginObj {
   return {
     visitor: {
+      // When a class is converted to a variable declaration, the default export must be moved
+      // to a subsequent statement to prevent a JavaScript syntax error.
+      ExportDefaultDeclaration(path: NodePath<types.ExportDefaultDeclaration>, state: PluginPass) {
+        const declaration = path.get('declaration');
+        if (!declaration.isClassDeclaration()) {
+          return;
+        }
+
+        const { wrapDecorators } = state.opts as { wrapDecorators: boolean };
+        const analysis = analyzeClassSiblings(path, declaration.node.id, wrapDecorators);
+        exportDefaultAnalysis.set(declaration.node, analysis);
+
+        // Splitting the export declaration is not needed if the class will not be wrapped
+        if (analysis.hasPotentialSideEffects) {
+          return;
+        }
+
+        splitExportDeclaration(path);
+      },
       ClassDeclaration(path: NodePath<types.ClassDeclaration>, state: PluginPass) {
         const { node: classNode, parentPath } = path;
         const { wrapDecorators } = state.opts as { wrapDecorators: boolean };
@@ -210,19 +237,94 @@ export default function (): PluginObj {
         }
 
         // Analyze sibling statements for elements of the class that were downleveled
-        const hasExport =
-          parentPath.isExportNamedDeclaration() || parentPath.isExportDefaultDeclaration();
-        const origin = hasExport ? parentPath : path;
-        const { wrapStatementPaths, hasPotentialSideEffects } = analyzeClassSiblings(
-          origin,
-          classNode.id,
-          wrapDecorators,
-        );
+        const origin = parentPath.isExportNamedDeclaration() ? parentPath : path;
+        const { wrapStatementPaths, hasPotentialSideEffects } =
+          exportDefaultAnalysis.get(classNode) ??
+          analyzeClassSiblings(origin, classNode.id, wrapDecorators);
 
         visitedClasses.add(classNode);
 
-        if (hasPotentialSideEffects || wrapStatementPaths.length === 0) {
+        if (hasPotentialSideEffects) {
           return;
+        }
+
+        // If no statements to wrap, check for static class properties.
+        // Static class properties may be downleveled at later stages in the build pipeline
+        // which results in additional function calls outside the class body. These calls
+        // then cause the class to be referenced and not eligible for removal. Since it is
+        // not known at this stage whether the class needs to be downleveled, the transform
+        // wraps classes preemptively to allow for potential removal within the optimization
+        // stages.
+        if (wrapStatementPaths.length === 0) {
+          let shouldWrap = false;
+          for (const element of path.get('body').get('body')) {
+            if (element.isClassProperty()) {
+              // Only need to analyze static properties
+              if (!element.node.static) {
+                continue;
+              }
+
+              // Check for potential side effects.
+              // These checks are conservative and could potentially be expanded in the future.
+              const elementKey = element.get('key');
+              const elementValue = element.get('value');
+              if (
+                elementKey.isIdentifier() &&
+                (!elementValue.isExpression() ||
+                  canWrapProperty(elementKey.node.name, elementValue))
+              ) {
+                shouldWrap = true;
+              } else {
+                // Not safe to wrap
+                shouldWrap = false;
+                break;
+              }
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            } else if ((element as any).isStaticBlock()) {
+              // Only need to analyze static blocks
+              const body = element.get('body');
+
+              if (Array.isArray(body) && body.length > 1) {
+                // Not safe to wrap
+                shouldWrap = false;
+                break;
+              }
+
+              const expression = body.find((n: NodePath<types.Node>) =>
+                n.isExpressionStatement(),
+              ) as NodePath<types.ExpressionStatement> | undefined;
+
+              const assignmentExpression = expression?.get('expression');
+              if (assignmentExpression?.isAssignmentExpression()) {
+                const left = assignmentExpression.get('left');
+                if (!left.isMemberExpression()) {
+                  continue;
+                }
+
+                if (!left.get('object').isThisExpression()) {
+                  // Not safe to wrap
+                  shouldWrap = false;
+                  break;
+                }
+
+                const element = left.get('property');
+                const right = assignmentExpression.get('right');
+                if (
+                  element.isIdentifier() &&
+                  (!right.isExpression() || canWrapProperty(element.node.name, right))
+                ) {
+                  shouldWrap = true;
+                } else {
+                  // Not safe to wrap
+                  shouldWrap = false;
+                  break;
+                }
+              }
+            }
+          }
+          if (!shouldWrap) {
+            return;
+          }
         }
 
         const wrapStatementNodes: types.Statement[] = [];
@@ -250,18 +352,7 @@ export default function (): PluginObj {
         const declaration = types.variableDeclaration('let', [
           types.variableDeclarator(types.cloneNode(classNode.id), replacementInitializer),
         ]);
-        if (parentPath.isExportDefaultDeclaration()) {
-          // When converted to a variable declaration, the default export must be moved
-          // to a subsequent statement to prevent a JavaScript syntax error.
-          parentPath.replaceWithMultiple([
-            declaration,
-            types.exportNamedDeclaration(undefined, [
-              types.exportSpecifier(types.cloneNode(classNode.id), types.identifier('default')),
-            ]),
-          ]);
-        } else {
-          path.replaceWith(declaration);
-        }
+        path.replaceWith(declaration);
       },
       ClassExpression(path: NodePath<types.ClassExpression>, state: PluginPass) {
         const { node: classNode, parentPath } = path;

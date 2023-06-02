@@ -10,8 +10,7 @@ import Ajv, { SchemaObjCxt, ValidateFunction } from 'ajv';
 import ajvAddFormats from 'ajv-formats';
 import * as http from 'http';
 import * as https from 'https';
-import { Observable, from, isObservable } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { Observable, from, isObservable, lastValueFrom } from 'rxjs';
 import * as Url from 'url';
 import { BaseException } from '../../exception';
 import { PartiallyOrderedSet, deepCopy } from '../../utils';
@@ -131,7 +130,7 @@ export class CoreSchemaRegistry implements SchemaRegistry {
       }
 
       if (isObservable(handlerResult)) {
-        handlerResult = handlerResult.toPromise();
+        handlerResult = lastValueFrom(handlerResult);
       }
 
       const value = await handlerResult;
@@ -221,19 +220,15 @@ export class CoreSchemaRegistry implements SchemaRegistry {
    * Flatten the Schema, resolving and replacing all the refs. Makes it into a synchronous schema
    * that is also easier to traverse. Does not cache the result.
    *
-   * @param schema The schema or URI to flatten.
-   * @returns An Observable of the flattened schema object.
-   * @deprecated since 11.2 without replacement.
    * Producing a flatten schema document does not in all cases produce a schema with identical behavior to the original.
    * See: https://json-schema.org/draft/2019-09/json-schema-core.html#rfc.appendix.B.2
+   *
+   * @param schema The schema or URI to flatten.
+   * @returns An Observable of the flattened schema object.
+   * @private since 11.2 without replacement.
    */
-  flatten(schema: JsonObject): Observable<JsonObject> {
-    return from(this._flatten(schema));
-  }
-
-  private async _flatten(schema: JsonObject): Promise<JsonObject> {
+  async ɵflatten(schema: JsonObject): Promise<JsonObject> {
     this._ajv.removeSchema(schema);
-
     this._currentCompilationSchemaInfo = undefined;
     const validate = await this._ajv.compileAsync(schema);
 
@@ -273,12 +268,11 @@ export class CoreSchemaRegistry implements SchemaRegistry {
    *
    * @param schema The schema to validate. If a string, will fetch the schema before compiling it
    * (using schema as a URI).
-   * @returns An Observable of the Validation function.
    */
-  compile(schema: JsonSchema): Observable<SchemaValidator> {
-    return from(this._compile(schema)).pipe(
-      map((validate) => (value, options) => from(validate(value, options))),
-    );
+  async compile(schema: JsonSchema): Promise<SchemaValidator> {
+    const validate = await this._compile(schema);
+
+    return (value, options) => validate(value, options);
   }
 
   private async _compile(
@@ -326,13 +320,9 @@ export class CoreSchemaRegistry implements SchemaRegistry {
       // Apply pre-validation transforms
       if (validationOptions.applyPreTransforms) {
         for (const visitor of this._pre.values()) {
-          data = await visitJson(
-            data,
-            visitor,
-            schema,
-            this._resolver.bind(this),
-            validator,
-          ).toPromise();
+          data = await lastValueFrom(
+            visitJson(data, visitor, schema, this._resolver.bind(this), validator),
+          );
         }
       }
 
@@ -349,7 +339,9 @@ export class CoreSchemaRegistry implements SchemaRegistry {
           return value;
         };
         if (typeof schema === 'object') {
-          await visitJson(data, visitor, schema, this._resolver.bind(this), validator).toPromise();
+          await lastValueFrom(
+            visitJson(data, visitor, schema, this._resolver.bind(this), validator),
+          );
         }
 
         const definitions = schemaInfo.promptDefinitions.filter(
@@ -379,13 +371,9 @@ export class CoreSchemaRegistry implements SchemaRegistry {
       // Apply post-validation transforms
       if (validationOptions.applyPostTransforms) {
         for (const visitor of this._post.values()) {
-          data = await visitJson(
-            data,
-            visitor,
-            schema,
-            this._resolver.bind(this),
-            validator,
-          ).toPromise();
+          data = await lastValueFrom(
+            visitJson(data, visitor, schema, this._resolver.bind(this), validator),
+          );
         }
       }
 
@@ -585,7 +573,7 @@ export class CoreSchemaRegistry implements SchemaRegistry {
       return;
     }
 
-    const answers = await from(provider(prompts)).toPromise();
+    const answers = await lastValueFrom(from(provider(prompts)));
     for (const path in answers) {
       const pathFragments = path.split('/').slice(1);
 
@@ -649,8 +637,8 @@ export class CoreSchemaRegistry implements SchemaRegistry {
       }
 
       let value = source(schema);
-      if (isObservable<{}>(value)) {
-        value = await value.toPromise();
+      if (isObservable(value)) {
+        value = (await lastValueFrom(value)) as {};
       }
 
       CoreSchemaRegistry._set(data, fragments, value);

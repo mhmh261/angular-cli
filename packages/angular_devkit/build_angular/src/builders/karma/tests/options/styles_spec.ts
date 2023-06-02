@@ -16,7 +16,7 @@ describeBuilder(execute, KARMA_BUILDER_INFO, (harness) => {
         'src/styles.css': 'p {display: none}',
         'src/app/app.component.ts': `
           import { Component } from '@angular/core';
-  
+
           @Component({
             selector: 'app-root',
             template: '<p>Hello World</p>'
@@ -27,18 +27,12 @@ describeBuilder(execute, KARMA_BUILDER_INFO, (harness) => {
         'src/app/app.component.spec.ts': `
           import { TestBed } from '@angular/core/testing';
           import { AppComponent } from './app.component';
-  
+
           describe('AppComponent', () => {
-            beforeEach(async () => {
-              await TestBed.configureTestingModule({
-                imports: [
-                ],
-                declarations: [
-                  AppComponent
-                ]
-              }).compileComponents();
-            });
-  
+            beforeEach(() => TestBed.configureTestingModule({
+              declarations: [AppComponent]
+            }));
+
             it('should not contain text that is hidden via css', () => {
               const fixture = TestBed.createComponent(AppComponent);
               expect(fixture.nativeElement.innerText).not.toContain('Hello World');
@@ -97,16 +91,10 @@ describeBuilder(execute, KARMA_BUILDER_INFO, (harness) => {
         import { HttpClientModule } from '@angular/common/http';
         import { AppComponent } from './app.component';
         describe('AppComponent', () => {
-          beforeEach(async () => {
-            await TestBed.configureTestingModule({
-              imports: [
-                HttpClientModule
-              ],
-              declarations: [
-                AppComponent
-              ]
-            }).compileComponents();
-          });
+          beforeEach(() => TestBed.configureTestingModule({
+            imports: [HttpClientModule],
+            declarations: [AppComponent]
+          }));
           it('should create the app', () => {
             const fixture = TestBed.createComponent(AppComponent);
             const app = fixture.debugElement.componentInstance;
@@ -128,6 +116,23 @@ describeBuilder(execute, KARMA_BUILDER_INFO, (harness) => {
 
       const { result } = await harness.executeOnce();
       expect(result?.success).toBeTrue();
+    });
+
+    it('fails and shows an error if style does not exist', async () => {
+      harness.useTarget('test', {
+        ...BASE_OPTIONS,
+        styles: ['src/test-style-a.css'],
+      });
+
+      const { result, logs } = await harness.executeOnce({ outputLogsOnFailure: false });
+
+      expect(result?.success).toBeFalse();
+      expect(logs).toContain(
+        jasmine.objectContaining({
+          level: 'error',
+          message: jasmine.stringMatching(`Can't resolve 'src/test-style-a.css'`),
+        }),
+      );
     });
   });
 });

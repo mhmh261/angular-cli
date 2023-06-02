@@ -5,13 +5,13 @@ import { <%= camelize(name) %>Resolver } from './<%= dasherize(name) %>.resolver
 
 describe('<%= camelize(name) %>Resolver', () => {
   const executeResolver: ResolveFn<boolean> = (...resolverParameters) => 
-      TestBed.inject(EnvironmentInjector).runInContext(() => <%= camelize(name) %>Resolver(...resolverParameters));
+      TestBed.runInInjectionContext(() => <%= camelize(name) %>Resolver(...resolverParameters));
 
   beforeEach(() => {
     TestBed.configureTestingModule({});
   });
 
   it('should be created', () => {
-    expect(resolver).toBeTruthy();
+    expect(executeResolver).toBeTruthy();
   });
 });

@@ -169,14 +169,27 @@ describe('adjust-static-class-members Babel plugin', () => {
   });
 
   it('does not wrap default exported class with no connected siblings', () => {
-    testCaseNoChange(`
-      export default class CustomComponentEffects {
-        constructor(_actions) {
-          this._actions = _actions;
-          this.doThis = this._actions;
+    // NOTE: This could technically have no changes but the default export splitting detection
+    // does not perform class property analysis currently.
+    testCase({
+      input: `
+        export default class CustomComponentEffects {
+          constructor(_actions) {
+            this._actions = _actions;
+            this.doThis = this._actions;
+          }
         }
-      }
-    `);
+      `,
+      expected: `
+        class CustomComponentEffects {
+          constructor(_actions) {
+            this._actions = _actions;
+            this.doThis = this._actions;
+          }
+        }
+        export { CustomComponentEffects as default };
+      `,
+    });
   });
 
   it('does wrap not default exported class with only side effect fields', () => {
@@ -191,7 +204,7 @@ describe('adjust-static-class-members Babel plugin', () => {
     `);
   });
 
-  it('does wrap not class with only side effect fields', () => {
+  it('does not wrap class with only side effect fields', () => {
     testCaseNoChange(`
       class CustomComponentEffects {
         constructor(_actions) {
@@ -200,6 +213,30 @@ describe('adjust-static-class-members Babel plugin', () => {
         }
       }
       CustomComponentEffects.someFieldWithSideEffects = console.log('foo');
+    `);
+  });
+
+  it('does not wrap class with only side effect native fields', () => {
+    testCaseNoChange(`
+      class CustomComponentEffects {
+        static someFieldWithSideEffects = console.log('foo');
+        constructor(_actions) {
+          this._actions = _actions;
+          this.doThis = this._actions;
+        }
+      }
+    `);
+  });
+
+  it('does not wrap class with only instance native fields', () => {
+    testCaseNoChange(`
+      class CustomComponentEffects {
+        someFieldWithSideEffects = console.log('foo');
+        constructor(_actions) {
+          this._actions = _actions;
+          this.doThis = this._actions;
+        }
+      }
     `);
   });
 
@@ -223,6 +260,32 @@ describe('adjust-static-class-members Babel plugin', () => {
             }
           }
           CustomComponentEffects.someFieldWithSideEffects = /*#__PURE__*/ console.log('foo');
+          return CustomComponentEffects;
+        })();
+      `,
+    });
+  });
+
+  it('wraps class with pure annotated side effect native fields (#__PURE__)', () => {
+    testCase({
+      input: `
+        class CustomComponentEffects {
+          static someFieldWithSideEffects = /*#__PURE__*/ console.log('foo');
+          constructor(_actions) {
+            this._actions = _actions;
+            this.doThis = this._actions;
+          }
+        }
+      `,
+      expected: `
+        let CustomComponentEffects = /*#__PURE__*/ (() => {
+          class CustomComponentEffects {
+            static someFieldWithSideEffects = /*#__PURE__*/ console.log('foo');
+            constructor(_actions) {
+              this._actions = _actions;
+              this.doThis = this._actions;
+            }
+          }
           return CustomComponentEffects;
         })();
       `,
@@ -335,6 +398,32 @@ describe('adjust-static-class-members Babel plugin', () => {
     });
   });
 
+  it('wraps exported class with a pure native static field', () => {
+    testCase({
+      input: `
+        export class CustomComponentEffects {
+          static someField = 42;
+          constructor(_actions) {
+            this._actions = _actions;
+            this.doThis = this._actions;
+          }
+        }
+      `,
+      expected: `
+        export let CustomComponentEffects = /*#__PURE__*/ (() => {
+          class CustomComponentEffects {
+            static someField = 42;
+            constructor(_actions) {
+              this._actions = _actions;
+              this.doThis = this._actions;
+            }
+          }
+          return CustomComponentEffects;
+        })();
+      `,
+    });
+  });
+
   it('wraps class with a basic literal static field', () => {
     testCase({
       input: `
@@ -413,6 +502,32 @@ describe('adjust-static-class-members Babel plugin', () => {
       }
       CustomComponentEffects.someField = 42;
       CustomComponentEffects.someFieldWithSideEffects = console.log('foo');
+    `);
+  });
+
+  it('does not wrap class with only pure native static fields and some side effect static fields', () => {
+    testCaseNoChange(`
+      class CustomComponentEffects {
+        static someField = 42;
+        constructor(_actions) {
+          this._actions = _actions;
+          this.doThis = this._actions;
+        }
+      }
+      CustomComponentEffects.someFieldWithSideEffects = console.log('foo');
+    `);
+  });
+
+  it('does not wrap class with only some pure native static fields', () => {
+    testCaseNoChange(`
+      class CustomComponentEffects {
+        static someField = 42;
+        static someFieldWithSideEffects = console.log('foo');
+        constructor(_actions) {
+          this._actions = _actions;
+          this.doThis = this._actions;
+        }
+      }
     `);
   });
 
@@ -554,6 +669,42 @@ describe('adjust-static-class-members Babel plugin', () => {
     });
   });
 
+  it('wraps class with Angular ɵfac static block (ES2022 + useDefineForClassFields: false)', () => {
+    testCase({
+      input: `
+        class CommonModule {
+          static { this.ɵfac = function CommonModule_Factory(t) { return new (t || CommonModule)(); }; }
+          static { this.ɵmod = ɵngcc0.ɵɵdefineNgModule({ type: CommonModule }); }
+        }
+      `,
+      expected: `
+        let CommonModule = /*#__PURE__*/ (() => {
+          class CommonModule {
+            static {
+              this.ɵfac = function CommonModule_Factory(t) {
+                return new (t || CommonModule)();
+              };
+            }
+            static {
+              this.ɵmod = ɵngcc0.ɵɵdefineNgModule({
+                type: CommonModule,
+              });
+            }
+          }
+          return CommonModule;
+        })();
+      `,
+    });
+  });
+
+  it('does not wrap class with side effect full static block (ES2022 + useDefineForClassFields: false)', () => {
+    testCaseNoChange(`
+        class CommonModule {
+          static { globalThis.bar = 1 }
+        }
+      `);
+  });
+
   it('wraps class with Angular ɵmod static field', () => {
     testCase({
       input: `
@@ -597,7 +748,7 @@ describe('adjust-static-class-members Babel plugin', () => {
     });
   });
 
-  it('wraps class with multiple Angular static field', () => {
+  it('wraps class with multiple Angular static fields', () => {
     testCase({
       input: `
         class CommonModule {
@@ -620,6 +771,41 @@ describe('adjust-static-class-members Babel plugin', () => {
                     useClass: NgLocaleLocalization
                   },
               ]});
+          return CommonModule;
+        })();
+      `,
+    });
+  });
+
+  it('wraps class with multiple Angular native static fields', () => {
+    testCase({
+      input: `
+        class CommonModule {
+          static ɵfac = function CommonModule_Factory(t) { return new (t || CommonModule)(); };
+          static ɵmod = /*@__PURE__*/ ɵngcc0.ɵɵdefineNgModule({ type: CommonModule });
+          static ɵinj = ɵngcc0.ɵɵdefineInjector({ providers: [
+            { provide: NgLocalization, useClass: NgLocaleLocalization },
+        ] });
+        }
+      `,
+      expected: `
+        let CommonModule = /*#__PURE__*/ (() => {
+          class CommonModule {
+            static ɵfac = function CommonModule_Factory(t) {
+              return new (t || CommonModule)();
+            };
+            static ɵmod = /*@__PURE__*/ ɵngcc0.ɵɵdefineNgModule({
+              type: CommonModule,
+            });
+            static ɵinj = ɵngcc0.ɵɵdefineInjector({
+              providers: [
+                {
+                  provide: NgLocalization,
+                  useClass: NgLocaleLocalization,
+                },
+              ],
+            });
+          }
           return CommonModule;
         })();
       `,

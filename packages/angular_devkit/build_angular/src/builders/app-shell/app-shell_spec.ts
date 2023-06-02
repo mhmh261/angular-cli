@@ -58,7 +58,7 @@ describe('AppShell Builder', () => {
           AppComponent
         ],
         imports: [
-          BrowserModule.withServerTransition({ appId: 'serverApp' }),
+          BrowserModule,
           AppRoutingModule,
           RouterModule
         ],
@@ -67,7 +67,7 @@ describe('AppShell Builder', () => {
       })
       export class AppModule { }
     `,
-    'src/app/app.server.module.ts': `
+    'src/app/app.module.server.ts': `
       import { NgModule } from '@angular/core';
       import { ServerModule } from '@angular/platform-server';
 
@@ -116,14 +116,6 @@ describe('AppShell Builder', () => {
   };
 
   it('works (basic)', async () => {
-    host.replaceInFile(
-      'src/app/app.module.ts',
-      / {4}BrowserModule/,
-      `
-      BrowserModule.withServerTransition({ appId: 'some-app' })
-    `,
-    );
-
     const run = await architect.scheduleTarget(target);
     const output = await run.result;
     await run.stop();
@@ -168,7 +160,33 @@ describe('AppShell Builder', () => {
     expect(content).toContain('app-shell works!');
     expect(content).toContain('p{color:#000}');
     expect(content).toMatch(
-      /<link rel="stylesheet" href="styles\.[a-z0-9]+\.css" media="print" onload="this\.media='all'">/,
+      /<link rel="stylesheet" href="styles\.[a-z0-9]+\.css" media="print" onload="this.media=&apos;all&apos;">/,
+    );
+  });
+
+  it('applies CSP nonce to critical CSS', async () => {
+    host.writeMultipleFiles(appShellRouteFiles);
+    host.replaceInFile('src/index.html', /<app-root/g, '<app-root ngCspNonce="{% nonce %}" ');
+    const overrides = {
+      route: 'shell',
+      browserTarget: 'app:build:production,inline-critical-css',
+    };
+
+    const run = await architect.scheduleTarget(target, overrides);
+    const output = await run.result;
+    await run.stop();
+
+    expect(output.success).toBe(true);
+    const fileName = 'dist/index.html';
+    const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
+
+    expect(content).toContain('app-shell works!');
+    expect(content).toContain('<style nonce="{% nonce %}">p{color:#000}</style>');
+    expect(content).toContain('<style nonce="{% nonce %}" ng-app-id="ng">');
+    expect(content).toContain('<app-root ngcspnonce="{% nonce %}"');
+    expect(content).toContain('<script nonce="{% nonce %}">');
+    expect(content).toMatch(
+      /<link rel="stylesheet" href="styles\.[a-z0-9]+\.css" media="print" ngCspMedia="all">/,
     );
   });
 });

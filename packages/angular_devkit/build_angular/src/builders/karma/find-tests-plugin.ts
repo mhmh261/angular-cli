@@ -7,14 +7,11 @@
  */
 
 import assert from 'assert';
+import glob, { isDynamicPattern } from 'fast-glob';
 import { PathLike, constants, promises as fs } from 'fs';
-import glob, { hasMagic } from 'glob';
+import { pluginName } from 'mini-css-extract-plugin';
 import { basename, dirname, extname, join, relative } from 'path';
-import { promisify } from 'util';
 import type { Compilation, Compiler } from 'webpack';
-import { addError } from '../../utils/webpack-diagnostics';
-
-const globPromise = promisify(glob);
 
 /**
  * The name of the plugin provided to Webpack when tapping Webpack compiler hooks.
@@ -23,6 +20,7 @@ const PLUGIN_NAME = 'angular-find-tests-plugin';
 
 export interface FindTestsPluginOptions {
   include?: string[];
+  exclude?: string[];
   workspaceRoot: string;
   projectSourceRoot: string;
 }
@@ -33,7 +31,12 @@ export class FindTestsPlugin {
   constructor(private options: FindTestsPluginOptions) {}
 
   apply(compiler: Compiler): void {
-    const { include = ['**/*.spec.ts'], projectSourceRoot, workspaceRoot } = this.options;
+    const {
+      include = ['**/*.spec.ts'],
+      exclude = [],
+      projectSourceRoot,
+      workspaceRoot,
+    } = this.options;
     const webpackOptions = compiler.options;
     const entry =
       typeof webpackOptions.entry === 'function' ? webpackOptions.entry() : webpackOptions.entry;
@@ -42,24 +45,22 @@ export class FindTestsPlugin {
 
     // Add tests files are part of the entry-point.
     webpackOptions.entry = async () => {
-      const specFiles = await findTests(include, workspaceRoot, projectSourceRoot);
-
-      if (!specFiles.length) {
-        assert(this.compilation, 'Compilation cannot be undefined.');
-        addError(
-          this.compilation,
-          `Specified patterns: "${include.join(', ')}" did not match any spec files.`,
-        );
-      }
-
+      const specFiles = await findTests(include, exclude, workspaceRoot, projectSourceRoot);
       const entrypoints = await entry;
       const entrypoint = entrypoints['main'];
       if (!entrypoint.import) {
         throw new Error(`Cannot find 'main' entrypoint.`);
       }
 
-      originalImport ??= entrypoint.import;
-      entrypoint.import = [...originalImport, ...specFiles];
+      if (specFiles.length) {
+        originalImport ??= entrypoint.import;
+        entrypoint.import = [...originalImport, ...specFiles];
+      } else {
+        assert(this.compilation, 'Compilation cannot be undefined.');
+        this.compilation
+          .getLogger(pluginName)
+          .error(`Specified patterns: "${include.join(', ')}" did not match any spec files.`);
+      }
 
       return entrypoints;
     };
@@ -73,12 +74,13 @@ export class FindTestsPlugin {
 
 // go through all patterns and find unique list of files
 async function findTests(
-  patterns: string[],
+  include: string[],
+  exclude: string[],
   workspaceRoot: string,
   projectSourceRoot: string,
 ): Promise<string[]> {
-  const matchingTestsPromises = patterns.map((pattern) =>
-    findMatchingTests(pattern, workspaceRoot, projectSourceRoot),
+  const matchingTestsPromises = include.map((pattern) =>
+    findMatchingTests(pattern, exclude, workspaceRoot, projectSourceRoot),
   );
   const files = await Promise.all(matchingTestsPromises);
 
@@ -90,6 +92,7 @@ const normalizePath = (path: string): string => path.replace(/\\/g, '/');
 
 async function findMatchingTests(
   pattern: string,
+  ignore: string[],
   workspaceRoot: string,
   projectSourceRoot: string,
 ): Promise<string[]> {
@@ -108,7 +111,7 @@ async function findMatchingTests(
   }
 
   // special logic when pattern does not look like a glob
-  if (!hasMagic(normalizedPattern)) {
+  if (!isDynamicPattern(normalizedPattern)) {
     if (await isDirectory(join(projectSourceRoot, normalizedPattern))) {
       normalizedPattern = `${normalizedPattern}/**/*.spec.@(ts|tsx)`;
     } else {
@@ -127,12 +130,10 @@ async function findMatchingTests(
     }
   }
 
-  return globPromise(normalizedPattern, {
+  return glob(normalizedPattern, {
     cwd: projectSourceRoot,
-    root: projectSourceRoot,
-    nomount: true,
     absolute: true,
-    ignore: ['**/node_modules/**'],
+    ignore: ['**/node_modules/**', ...ignore],
   });
 }
 

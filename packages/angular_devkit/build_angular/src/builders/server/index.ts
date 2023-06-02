@@ -8,9 +8,9 @@
 
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
 import { runWebpack } from '@angular-devkit/build-webpack';
-import * as path from 'path';
-import { Observable, from } from 'rxjs';
-import { concatMap } from 'rxjs/operators';
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { Observable, concatMap, from } from 'rxjs';
 import webpack, { Configuration } from 'webpack';
 import { ExecutionTransformer } from '../../transforms';
 import {
@@ -33,7 +33,13 @@ import {
 } from '../../utils/webpack-browser-config';
 import { getCommonConfig, getStylesConfig } from '../../webpack/configs';
 import { isPlatformServerInstalled } from '../../webpack/utils/helpers';
-import { webpackStatsLogger } from '../../webpack/utils/stats';
+import {
+  statsErrorsToString,
+  statsHasErrors,
+  statsHasWarnings,
+  statsWarningsToString,
+  webpackStatsLogger,
+} from '../../webpack/utils/stats';
 import { Schema as ServerBuilderOptions } from './schema';
 
 /**
@@ -41,15 +47,7 @@ import { Schema as ServerBuilderOptions } from './schema';
  */
 export type ServerBuilderOutput = BuilderOutput & {
   baseOutputPath: string;
-  /**
-   * @deprecated in version 14. Use 'outputs' instead.
-   */
-  outputPaths: string[];
-  /**
-   * @deprecated in version 9. Use 'outputs' instead.
-   */
   outputPath: string;
-
   outputs: {
     locale?: string;
     path: string;
@@ -87,12 +85,19 @@ export function execute(
         },
       }).pipe(
         concatMap(async (output) => {
-          const { emittedFiles = [], outputPath, webpackStats } = output;
+          const { emittedFiles = [], outputPath, webpackStats, success } = output;
           if (!webpackStats) {
             throw new Error('Webpack stats build result is required.');
           }
 
-          if (!output.success) {
+          if (!success) {
+            if (statsHasWarnings(webpackStats)) {
+              context.logger.warn(statsWarningsToString(webpackStats, { colors: true }));
+            }
+            if (statsHasErrors(webpackStats)) {
+              context.logger.error(statsErrorsToString(webpackStats, { colors: true }));
+            }
+
             return output;
           }
 
@@ -160,8 +165,6 @@ export function execute(
       return {
         ...output,
         baseOutputPath,
-        outputPath: baseOutputPath,
-        outputPaths: outputPaths || [baseOutputPath],
         outputs: (outputPaths &&
           [...outputPaths.entries()].map(([locale, path]) => ({
             locale,
@@ -189,6 +192,8 @@ async function initialize(
   // Purge old build disk cache.
   await purgeStaleBuildCache(context);
 
+  await checkTsConfigForPreserveWhitespacesSetting(context, options.tsConfig);
+
   const browserslist = (await import('browserslist')).default;
   const originalOutputPath = options.outputPath;
   // Assets are processed directly by the builder except when watching
@@ -198,7 +203,6 @@ async function initialize(
     await generateI18nBrowserWebpackConfigFromContext(
       {
         ...adjustedOptions,
-        buildOptimizer: false,
         aot: true,
         platform: 'server',
       } as NormalizedBrowserBuilderSchema,
@@ -219,6 +223,32 @@ async function initialize(
   const transformedConfig = (await webpackConfigurationTransform?.(config)) ?? config;
 
   return { config: transformedConfig, i18n, projectRoot, projectSourceRoot };
+}
+
+async function checkTsConfigForPreserveWhitespacesSetting(
+  context: BuilderContext,
+  tsConfigPath: string,
+): Promise<void> {
+  // We don't use the `readTsConfig` method on purpose here.
+  // To only catch cases were `preserveWhitespaces` is set directly in the `tsconfig.server.json`,
+  // which in the majority of cases will cause a mistmatch between client and server builds.
+  // Technically we should check if `tsconfig.server.json` and `tsconfig.app.json` values match.
+
+  // But:
+  // 1. It is not guaranteed that `tsconfig.app.json` is used to build the client side of this app.
+  // 2. There is no easy way to access the build build config from the server builder.
+  // 4. This will no longer be an issue with a single compilation model were the same tsconfig is used for both browser and server builds.
+  const content = await readFile(path.join(context.workspaceRoot, tsConfigPath), 'utf-8');
+  const { parse } = await import('jsonc-parser');
+  const tsConfig = parse(content, [], { allowTrailingComma: true });
+  if (tsConfig.angularCompilerOptions?.preserveWhitespaces !== undefined) {
+    context.logger.warn(
+      `"preserveWhitespaces" was set in "${tsConfigPath}". ` +
+        'Make sure that this setting is set consistently in both "tsconfig.server.json" for your server side ' +
+        'and "tsconfig.app.json" for your client side. A mismatched value will cause hydration to break.\n' +
+        'For more information see: https://angular.io/guide/hydration#preserve-whitespaces',
+    );
+  }
 }
 
 /**

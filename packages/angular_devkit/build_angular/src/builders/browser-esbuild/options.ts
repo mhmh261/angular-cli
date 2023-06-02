@@ -7,16 +7,43 @@
  */
 
 import { BuilderContext } from '@angular-devkit/architect';
-import * as path from 'path';
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { normalizeAssetPatterns, normalizeOptimization, normalizeSourceMaps } from '../../utils';
 import { normalizeCacheOptions } from '../../utils/normalize-cache';
-import { normalizePolyfills } from '../../utils/normalize-polyfills';
 import { generateEntryPoints } from '../../utils/package-chunk-sort';
+import { findTailwindConfigurationFile } from '../../utils/tailwind';
 import { getIndexInputFile, getIndexOutputFile } from '../../utils/webpack-browser-config';
-import { normalizeGlobalStyles } from '../../webpack/utils/helpers';
+import { globalScriptsByBundleName, normalizeGlobalStyles } from '../../webpack/utils/helpers';
 import { Schema as BrowserBuilderOptions, OutputHashing } from './schema';
 
 export type NormalizedBrowserOptions = Awaited<ReturnType<typeof normalizeOptions>>;
+
+/** Internal options hidden from builder schema but available when invoked programmatically. */
+interface InternalOptions {
+  /**
+   * Entry points to use for the compilation. Incompatible with `main`, which must not be provided. May be relative or absolute paths.
+   * If given a relative path, it is resolved relative to the current workspace and will generate an output at the same relative location
+   * in the output directory. If given an absolute path, the output will be generated in the root of the output directory with the same base
+   * name.
+   */
+  entryPoints?: Set<string>;
+
+  /** File extension to use for the generated output files. */
+  outExtension?: 'js' | 'mjs';
+
+  /**
+   * Indicates whether all node packages should be marked as external.
+   * Currently used by the dev-server to support prebundling.
+   */
+  externalPackages?: boolean;
+}
+
+/** Full set of options for `browser-esbuild` builder. */
+export type BrowserEsbuildOptions = Omit<BrowserBuilderOptions & InternalOptions, 'main'> & {
+  // `main` can be `undefined` if `entryPoints` is used.
+  main?: string;
+};
 
 /**
  * Normalize the user provided options by creating full paths for all path based options
@@ -31,34 +58,24 @@ export type NormalizedBrowserOptions = Awaited<ReturnType<typeof normalizeOption
 export async function normalizeOptions(
   context: BuilderContext,
   projectName: string,
-  options: BrowserBuilderOptions,
+  options: BrowserEsbuildOptions,
 ) {
   const workspaceRoot = context.workspaceRoot;
   const projectMetadata = await context.getProjectMetadata(projectName);
-  const projectRoot = path.join(workspaceRoot, (projectMetadata.root as string | undefined) ?? '');
-  const projectSourceRoot = path.join(
-    workspaceRoot,
-    (projectMetadata.sourceRoot as string | undefined) ?? 'src',
+  const projectRoot = normalizeDirectoryPath(
+    path.join(workspaceRoot, (projectMetadata.root as string | undefined) ?? ''),
+  );
+  const projectSourceRoot = normalizeDirectoryPath(
+    path.join(workspaceRoot, (projectMetadata.sourceRoot as string | undefined) ?? 'src'),
   );
 
+  // Gather persistent caching option and provide a project specific cache location
   const cacheOptions = normalizeCacheOptions(projectMetadata, workspaceRoot);
+  cacheOptions.path = path.join(cacheOptions.path, projectName);
 
-  const mainEntryPoint = path.join(workspaceRoot, options.main);
-
-  // Currently esbuild do not support multiple files per entry-point
-  const [polyfillsEntryPoint, ...remainingPolyfills] = normalizePolyfills(
-    options.polyfills,
-    workspaceRoot,
-  );
-
-  if (remainingPolyfills.length) {
-    context.logger.warn(
-      `The 'polyfills' option currently does not support multiple entries by this experimental builder. The first entry will be used.`,
-    );
-  }
-
+  const entryPoints = normalizeEntryPoints(workspaceRoot, options.main, options.entryPoints);
   const tsconfig = path.join(workspaceRoot, options.tsConfig);
-  const outputPath = path.join(workspaceRoot, options.outputPath);
+  const outputPath = normalizeDirectoryPath(path.join(workspaceRoot, options.outputPath));
   const optimizationOptions = normalizeOptimization(options.optimization);
   const sourcemapOptions = normalizeSourceMaps(options.sourceMap ?? false);
   const assets = options.assets?.length
@@ -100,20 +117,39 @@ export async function normalizeOptions(
     }
   }
 
+  const globalScripts: { name: string; files: string[]; initial: boolean }[] = [];
+  if (options.scripts?.length) {
+    for (const { bundleName, paths, inject } of globalScriptsByBundleName(options.scripts)) {
+      globalScripts.push({ name: bundleName, files: paths, initial: inject });
+    }
+  }
+
+  let tailwindConfiguration: { file: string; package: string } | undefined;
+  const tailwindConfigurationPath = await findTailwindConfigurationFile(workspaceRoot, projectRoot);
+  if (tailwindConfigurationPath) {
+    // Create a node resolver at the project root as a directory
+    const resolver = createRequire(projectRoot + '/');
+    try {
+      tailwindConfiguration = {
+        file: tailwindConfigurationPath,
+        package: resolver.resolve('tailwindcss'),
+      };
+    } catch {
+      const relativeTailwindConfigPath = path.relative(workspaceRoot, tailwindConfigurationPath);
+      context.logger.warn(
+        `Tailwind CSS configuration file found (${relativeTailwindConfigPath})` +
+          ` but the 'tailwindcss' package is not installed.` +
+          ` To enable Tailwind CSS, please install the 'tailwindcss' package.`,
+      );
+    }
+  }
+
   let serviceWorkerOptions;
   if (options.serviceWorker) {
     // If ngswConfigPath is not specified, the default is 'ngsw-config.json' within the project root
     serviceWorkerOptions = options.ngswConfigPath
       ? path.join(workspaceRoot, options.ngswConfigPath)
       : path.join(projectRoot, 'ngsw-config.json');
-  }
-
-  // Setup bundler entry points
-  const entryPoints: Record<string, string> = {
-    main: mainEntryPoint,
-  };
-  if (polyfillsEntryPoint) {
-    entryPoints['polyfills'] = polyfillsEntryPoint;
   }
 
   let indexHtmlOptions;
@@ -132,27 +168,45 @@ export async function normalizeOptions(
 
   // Initial options to keep
   const {
+    allowedCommonJsDependencies,
+    aot,
     baseHref,
     buildOptimizer,
     crossOrigin,
     externalDependencies,
+    extractLicenses,
+    inlineStyleLanguage = 'css',
+    outExtension,
     poll,
+    polyfills,
     preserveSymlinks,
+    statsJson,
     stylePreprocessorOptions,
     subresourceIntegrity,
     verbose,
     watch,
+    progress,
+    externalPackages,
   } = options;
 
   // Return all the normalized options
   return {
     advancedOptimizations: buildOptimizer,
+    allowedCommonJsDependencies,
     baseHref,
     cacheOptions,
     crossOrigin,
     externalDependencies,
+    extractLicenses,
+    inlineStyleLanguage,
+    jit: !aot,
+    stats: !!statsJson,
+    polyfills: polyfills === undefined || Array.isArray(polyfills) ? polyfills : [polyfills],
     poll,
-    preserveSymlinks,
+    progress: progress ?? true,
+    externalPackages,
+    // If not explicitly set, default to the Node.js process argument
+    preserveSymlinks: preserveSymlinks ?? process.execArgv.includes('--preserve-symlinks'),
     stylePreprocessorOptions,
     subresourceIntegrity,
     verbose,
@@ -161,6 +215,7 @@ export async function normalizeOptions(
     entryPoints,
     optimizationOptions,
     outputPath,
+    outExtension,
     sourcemapOptions,
     tsconfig,
     projectRoot,
@@ -168,7 +223,93 @@ export async function normalizeOptions(
     outputNames,
     fileReplacements,
     globalStyles,
+    globalScripts,
     serviceWorkerOptions,
     indexHtmlOptions,
+    tailwindConfiguration,
   };
+}
+
+/**
+ * Normalize entry point options. To maintain compatibility with the legacy browser builder, we need a single `main` option which defines a
+ * single entry point. However, we also want to support multiple entry points as an internal option. The two options are mutually exclusive
+ * and if `main` is provided it will be used as the sole entry point. If `entryPoints` are provided, they will be used as the set of entry
+ * points.
+ *
+ * @param workspaceRoot Path to the root of the Angular workspace.
+ * @param main The `main` option pointing at the application entry point. While required per the schema file, it may be omitted by
+ *     programmatic usages of `browser-esbuild`.
+ * @param entryPoints Set of entry points to use if provided.
+ * @returns An object mapping entry point names to their file paths.
+ */
+function normalizeEntryPoints(
+  workspaceRoot: string,
+  main: string | undefined,
+  entryPoints: Set<string> = new Set(),
+): Record<string, string> {
+  if (main === '') {
+    throw new Error('`main` option cannot be an empty string.');
+  }
+
+  // `main` and `entryPoints` are mutually exclusive.
+  if (main && entryPoints.size > 0) {
+    throw new Error('Only one of `main` or `entryPoints` may be provided.');
+  }
+  if (!main && entryPoints.size === 0) {
+    // Schema should normally reject this case, but programmatic usages of the builder might make this mistake.
+    throw new Error('Either `main` or at least one `entryPoints` value must be provided.');
+  }
+
+  // Schema types force `main` to always be provided, but it may be omitted when the builder is invoked programmatically.
+  if (main) {
+    // Use `main` alone.
+    return { 'main': path.join(workspaceRoot, main) };
+  } else {
+    // Use `entryPoints` alone.
+    const entryPointPaths: Record<string, string> = {};
+    for (const entryPoint of entryPoints) {
+      const parsedEntryPoint = path.parse(entryPoint);
+
+      // Use the input file path without an extension as the "name" of the entry point dictating its output location.
+      // Relative entry points are generated at the same relative path in the output directory.
+      // Absolute entry points are always generated with the same file name in the root of the output directory. This includes absolute
+      // paths pointing at files actually within the workspace root.
+      const entryPointName = path.isAbsolute(entryPoint)
+        ? parsedEntryPoint.name
+        : path.join(parsedEntryPoint.dir, parsedEntryPoint.name);
+
+      // Get the full file path to the entry point input.
+      const entryPointPath = path.isAbsolute(entryPoint)
+        ? entryPoint
+        : path.join(workspaceRoot, entryPoint);
+
+      // Check for conflicts with previous entry points.
+      const existingEntryPointPath = entryPointPaths[entryPointName];
+      if (existingEntryPointPath) {
+        throw new Error(
+          `\`${existingEntryPointPath}\` and \`${entryPointPath}\` both output to the same location \`${entryPointName}\`.` +
+            ' Rename or move one of the files to fix the conflict.',
+        );
+      }
+
+      entryPointPaths[entryPointName] = entryPointPath;
+    }
+
+    return entryPointPaths;
+  }
+}
+
+/**
+ * Normalize a directory path string.
+ * Currently only removes a trailing slash if present.
+ * @param path A path string.
+ * @returns A normalized path string.
+ */
+function normalizeDirectoryPath(path: string): string {
+  const last = path[path.length - 1];
+  if (last === '/' || last === '\\') {
+    return path.slice(0, -1);
+  }
+
+  return path;
 }

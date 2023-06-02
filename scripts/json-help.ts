@@ -10,9 +10,9 @@ import { logging } from '@angular-devkit/core';
 import { spawnSync } from 'child_process';
 import { promises as fs } from 'fs';
 import * as os from 'os';
-import { JsonHelp } from 'packages/angular/cli/src/command-builder/utilities/json-help';
 import * as path from 'path';
 import { packages } from '../lib/packages';
+import { JsonHelp } from '../packages/angular/cli/src/command-builder/utilities/json-help';
 import create from './create';
 
 export async function createTemporaryProject(logger: logging.Logger): Promise<string> {
@@ -38,7 +38,7 @@ export default async function ({ temporaryProjectRoot }: JsonHelpOptions, logger
 
   await fs.mkdir(helpOutputRoot);
 
-  const runNgCommandJsonHelp = (args: string[]): Promise<JsonHelp> => {
+  const runNgCommandJsonHelp = async (args: string[]): Promise<JsonHelp> => {
     const { stdout, status } = spawnSync(ngPath, [...args, '--json-help', '--help'], {
       cwd: newProjectRoot,
       maxBuffer: 200_0000,
@@ -46,10 +46,14 @@ export default async function ({ temporaryProjectRoot }: JsonHelpOptions, logger
     });
 
     if (status === 0) {
-      return Promise.resolve(JSON.parse(stdout.toString().trim()));
-    } else {
-      throw new Error(`Command failed: ${ngPath} ${args.map((x) => JSON.stringify(x)).join(', ')}`);
+      try {
+        return JSON.parse(stdout.toString().trim());
+      } catch (e) {
+        logger.error(`${e}`);
+      }
     }
+
+    throw new Error(`Command failed: ${ngPath} ${args.map((x) => JSON.stringify(x)).join(', ')}.`);
   };
 
   const { subcommands: commands = [] } = await runNgCommandJsonHelp([]);

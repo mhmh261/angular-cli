@@ -1,6 +1,6 @@
 """Re-export of some bazel rules with repository-wide defaults."""
 
-load("@npm//@bazel/concatjs/internal:build_defs.bzl", _ts_library = "ts_library_macro")
+load("@npm//@bazel/concatjs:index.bzl", _ts_library = "ts_library")
 load("@build_bazel_rules_nodejs//:index.bzl", "copy_to_bin", _js_library = "js_library", _pkg_npm = "pkg_npm")
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("@npm//@angular/build-tooling/bazel:extract_js_module_output.bzl", "extract_js_module_output")
@@ -36,7 +36,7 @@ def ts_library(
     if not devmode_module:
         devmode_module = "commonjs"
     if not devmode_target:
-        devmode_target = "es2018"
+        devmode_target = "es2020"
 
     _ts_library(
         name = name,
@@ -46,6 +46,7 @@ def ts_library(
         tsconfig = tsconfig,
         devmode_module = devmode_module,
         devmode_target = devmode_target,
+        prodmode_target = "es2020",
         # @external_end
         **kwargs
     )
@@ -59,7 +60,7 @@ def pkg_npm(name, pkg_deps = [], use_prodmode_output = False, **kwargs):
     in the same folder to exist.
 
     Args:
-        name: Name of the pkg_npm rule. '_archive.tar.gz' is appended to create the tarball.
+        name: Name of the pkg_npm rule. '_archive.tgz' is appended to create the tarball.
         pkg_deps: package.json files of dependent packages. These are used for local path substitutions when --config=local is set.
         use_prodmode_output: False to ship ES5 devmode output, True to ship ESM output. Defaults to False.
         **kwargs: Additional arguments passed to the real pkg_npm.
@@ -70,8 +71,8 @@ def pkg_npm(name, pkg_deps = [], use_prodmode_output = False, **kwargs):
 
     NPM_PACKAGE_SUBSTITUTIONS = {
         # Version of the local package being built, generated via the `--workspace_status_command` flag.
-        "0.0.0-PLACEHOLDER": "{BUILD_SCM_VERSION}",
-        "0.0.0-EXPERIMENTAL-PLACEHOLDER": "{BUILD_SCM_EXPERIMENTAL_VERSION}",
+        "0.0.0-PLACEHOLDER": "{STABLE_PROJECT_VERSION}",
+        "0.0.0-EXPERIMENTAL-PLACEHOLDER": "{STABLE_PROJECT_EXPERIMENTAL_VERSION}",
         "BUILD_SCM_HASH-PLACEHOLDER": "{BUILD_SCM_ABBREV_HASH}",
         "0.0.0-ENGINES-NODE": RELEASE_ENGINES_NODE,
         "0.0.0-ENGINES-NPM": RELEASE_ENGINES_NPM,
@@ -116,7 +117,7 @@ def pkg_npm(name, pkg_deps = [], use_prodmode_output = False, **kwargs):
     )
 
     # Copy package.json files to bazel-out so we can use their bazel-out paths to determine
-    # the corresponding package npm package tar.gz path for substitutions.
+    # the corresponding package npm package tgz path for substitutions.
     copy_to_bin(
         name = "package_json_copy",
         srcs = [pkg_json],
@@ -195,7 +196,7 @@ def pkg_npm(name, pkg_deps = [], use_prodmode_output = False, **kwargs):
     pkg_tar(
         name = name + "_archive",
         srcs = [":%s" % name],
-        extension = "tar.gz",
+        extension = "tgz",
         strip_prefix = "./%s" % name,
         visibility = visibility,
     )

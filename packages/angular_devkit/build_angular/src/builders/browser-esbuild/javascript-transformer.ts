@@ -15,6 +15,7 @@ export interface JavaScriptTransformerOptions {
   sourcemap: boolean;
   thirdPartySourcemaps?: boolean;
   advancedOptimizations?: boolean;
+  jit?: boolean;
 }
 
 /**
@@ -26,26 +27,43 @@ export interface JavaScriptTransformerOptions {
  */
 export class JavaScriptTransformer {
   #workerPool: Piscina;
+  #commonOptions: Required<JavaScriptTransformerOptions>;
 
-  constructor(private options: JavaScriptTransformerOptions, maxThreads?: number) {
+  constructor(options: JavaScriptTransformerOptions, maxThreads?: number) {
     this.#workerPool = new Piscina({
       filename: require.resolve('./javascript-transformer-worker'),
       maxThreads,
     });
+
+    // Extract options to ensure only the named options are serialized and sent to the worker
+    const {
+      sourcemap,
+      thirdPartySourcemaps = false,
+      advancedOptimizations = false,
+      jit = false,
+    } = options;
+    this.#commonOptions = {
+      sourcemap,
+      thirdPartySourcemaps,
+      advancedOptimizations,
+      jit,
+    };
   }
 
   /**
    * Performs JavaScript transformations on a file from the filesystem.
    * If no transformations are required, the data for the original file will be returned.
    * @param filename The full path to the file.
+   * @param skipLinker If true, bypass all Angular linker processing; if false, attempt linking.
    * @returns A promise that resolves to a UTF-8 encoded Uint8Array containing the result.
    */
-  transformFile(filename: string): Promise<Uint8Array> {
+  transformFile(filename: string, skipLinker?: boolean): Promise<Uint8Array> {
     // Always send the request to a worker. Files are almost always from node modules which measn
     // they may need linking. The data is also not yet available to perform most transformation checks.
     return this.#workerPool.run({
       filename,
-      ...this.options,
+      skipLinker,
+      ...this.#commonOptions,
     });
   }
 
@@ -61,13 +79,20 @@ export class JavaScriptTransformer {
     // Perform a quick test to determine if the data needs any transformations.
     // This allows directly returning the data without the worker communication overhead.
     let forceAsyncTransformation;
-    if (skipLinker && !this.options.advancedOptimizations) {
+    if (skipLinker && !this.#commonOptions.advancedOptimizations) {
       // If the linker is being skipped and no optimizations are needed, only async transformation is left.
-      // This checks for async generator functions. All other async transformation is handled by esbuild.
-      forceAsyncTransformation = data.includes('async') && /async\s+function\s*\*/.test(data);
+      // This checks for async generator functions and class methods. All other async transformation is handled by esbuild.
+      forceAsyncTransformation = data.includes('async') && /async(?:\s+function)?\s*\*/.test(data);
 
       if (!forceAsyncTransformation) {
-        return Buffer.from(data, 'utf-8');
+        const keepSourcemap =
+          this.#commonOptions.sourcemap &&
+          (!!this.#commonOptions.thirdPartySourcemaps || !/[\\/]node_modules[\\/]/.test(filename));
+
+        return Buffer.from(
+          keepSourcemap ? data : data.replace(/^\/\/# sourceMappingURL=[^\r\n]*/gm, ''),
+          'utf-8',
+        );
       }
     }
 
@@ -77,7 +102,7 @@ export class JavaScriptTransformer {
       // Send the async check result if present to avoid rechecking in the worker
       forceAsyncTransformation,
       skipLinker,
-      ...this.options,
+      ...this.#commonOptions,
     });
   }
 

@@ -7,11 +7,11 @@
 import { ErrorObject } from 'ajv';
 import { Format } from 'ajv';
 import { Observable } from 'rxjs';
+import { ObservableInput } from 'rxjs';
 import { Operator } from 'rxjs';
 import { PartialObserver } from 'rxjs';
 import { Position } from 'source-map';
 import { Subject } from 'rxjs';
-import { SubscribableOrPromise } from 'rxjs';
 import { Subscription } from 'rxjs';
 import { ValidateFunction } from 'ajv';
 
@@ -58,11 +58,6 @@ export class CircularDependencyFoundException extends BaseException {
 
 // @public
 function classify(str: string): string;
-
-// @public @deprecated (undocumented)
-export class ContentHasMutatedException extends BaseException {
-    constructor(path: string);
-}
 
 // @public
 class CordHost extends SimpleMemoryHost {
@@ -172,9 +167,7 @@ class CoreSchemaRegistry implements SchemaRegistry {
     addPreTransform(visitor: JsonVisitor, deps?: JsonVisitor[]): void;
     // (undocumented)
     addSmartDefaultProvider<T>(source: string, provider: SmartDefaultProvider<T>): void;
-    compile(schema: JsonSchema): Observable<SchemaValidator>;
-    // @deprecated
-    flatten(schema: JsonObject): Observable<JsonObject>;
+    compile(schema: JsonSchema): Promise<SchemaValidator>;
     // (undocumented)
     registerUriHandler(handler: UriHandler): void;
     // (undocumented)
@@ -186,6 +179,7 @@ class CoreSchemaRegistry implements SchemaRegistry {
     usePromptProvider(provider: PromptProvider): void;
     // (undocumented)
     useXDeprecatedProvider(onUsage: (message: string) => void): void;
+    ɵflatten(schema: JsonObject): Promise<JsonObject>;
 }
 
 // @public (undocumented)
@@ -243,7 +237,7 @@ export class FileAlreadyExistException extends BaseException {
 // @public (undocumented)
 type FileBuffer = ArrayBuffer;
 
-// @public (undocumented)
+// @public @deprecated (undocumented)
 const fileBuffer: TemplateTag<FileBuffer>;
 
 // @public (undocumented)
@@ -325,11 +319,6 @@ class IndentLogger extends Logger {
 // @public (undocumented)
 export class InvalidPathException extends BaseException {
     constructor(path: string);
-}
-
-// @public @deprecated (undocumented)
-export class InvalidUpdateRecordException extends BaseException {
-    constructor();
 }
 
 // @public
@@ -536,11 +525,6 @@ export { logging }
 // @public (undocumented)
 type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
-// @public @deprecated (undocumented)
-export class MergeConflictException extends BaseException {
-    constructor(path: string);
-}
-
 // @public
 function mergeSchemas(...schemas: (JsonSchema | undefined)[]): JsonSchema;
 
@@ -715,7 +699,7 @@ interface PromptDefinition {
 }
 
 // @public (undocumented)
-type PromptProvider = (definitions: Array<PromptDefinition>) => SubscribableOrPromise<{
+type PromptProvider = (definitions: Array<PromptDefinition>) => ObservableInput<{
     [id: string]: JsonValue;
 }>;
 
@@ -873,13 +857,13 @@ interface SchemaRegistry {
     // (undocumented)
     addSmartDefaultProvider<T>(source: string, provider: SmartDefaultProvider<T>): void;
     // (undocumented)
-    compile(schema: Object): Observable<SchemaValidator>;
-    // @deprecated (undocumented)
-    flatten(schema: JsonObject | string): Observable<JsonObject>;
+    compile(schema: Object): Promise<SchemaValidator>;
     // (undocumented)
     usePromptProvider(provider: PromptProvider): void;
     // (undocumented)
     useXDeprecatedProvider(onUsage: (message: string) => void): void;
+    // (undocumented)
+    ɵflatten(schema: JsonObject | string): Promise<JsonObject>;
 }
 
 // @public (undocumented)
@@ -894,7 +878,7 @@ class SchemaValidationException extends BaseException {
 // @public (undocumented)
 interface SchemaValidator {
     // (undocumented)
-    (data: JsonValue, options?: SchemaValidatorOptions): Observable<SchemaValidatorResult>;
+    (data: JsonValue, options?: SchemaValidatorOptions): Promise<SchemaValidatorResult>;
 }
 
 // @public (undocumented)
@@ -1321,19 +1305,9 @@ function trimNewlines(strings: TemplateStringsArray, ...values: any[]): string;
 // @public
 function underscore(str: string): string;
 
-// @public @deprecated (undocumented)
-export class UnimplementedException extends BaseException {
-    constructor();
-}
-
 // @public (undocumented)
 export class UnknownException extends BaseException {
     constructor(message: string);
-}
-
-// @public @deprecated (undocumented)
-export class UnsupportedPlatformException extends BaseException {
-    constructor();
 }
 
 // @public (undocumented)

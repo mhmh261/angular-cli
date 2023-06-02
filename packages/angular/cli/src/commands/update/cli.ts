@@ -6,8 +6,12 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import { UnsuccessfulWorkflowExecution } from '@angular-devkit/schematics';
-import { NodeWorkflow } from '@angular-devkit/schematics/tools';
+import { SchematicDescription, UnsuccessfulWorkflowExecution } from '@angular-devkit/schematics';
+import {
+  FileSystemCollectionDescription,
+  FileSystemSchematicDescription,
+  NodeWorkflow,
+} from '@angular-devkit/schematics/tools';
 import { SpawnSyncReturns, execSync, spawnSync } from 'child_process';
 import { existsSync, promises as fs } from 'fs';
 import { createRequire } from 'module';
@@ -42,6 +46,8 @@ import {
   getProjectDependencies,
   readPackageJson,
 } from '../../utilities/package-tree';
+import { askChoices } from '../../utilities/prompt';
+import { isTTY } from '../../utilities/tty';
 import { VERSION } from '../../utilities/version';
 
 interface UpdateCommandArgs {
@@ -57,10 +63,20 @@ interface UpdateCommandArgs {
   'create-commits': boolean;
 }
 
+interface MigrationSchematicDescription
+  extends SchematicDescription<FileSystemCollectionDescription, FileSystemSchematicDescription> {
+  version?: string;
+  optional?: boolean;
+}
+
+interface MigrationSchematicDescriptionWithVersion extends MigrationSchematicDescription {
+  version: string;
+}
+
 const ANGULAR_PACKAGES_REGEXP = /^@(?:angular|nguniversal)\//;
 const UPDATE_SCHEMATIC_COLLECTION = path.join(__dirname, 'schematic/collection.json');
 
-export class UpdateCommandModule extends CommandModule<UpdateCommandArgs> {
+export default class UpdateCommandModule extends CommandModule<UpdateCommandArgs> {
   override scope = CommandScope.In;
   protected override shouldReportAnalytics = false;
 
@@ -102,7 +118,7 @@ export class UpdateCommandModule extends CommandModule<UpdateCommandArgs> {
           'Version from which to migrate from. ' +
           `Only available with a single package being updated, and only with 'migrate-only'.`,
         type: 'string',
-        implies: ['to', 'migrate-only'],
+        implies: ['migrate-only'],
         conflicts: ['name'],
       })
       .option('to', {
@@ -337,66 +353,114 @@ export class UpdateCommandModule extends CommandModule<UpdateCommandArgs> {
     const migrationRange = new semver.Range(
       '>' + (semver.prerelease(from) ? from.split('-')[0] + '-0' : from) + ' <=' + to.split('-')[0],
     );
-    const migrations = [];
+
+    const requiredMigrations: MigrationSchematicDescriptionWithVersion[] = [];
+    const optionalMigrations: MigrationSchematicDescriptionWithVersion[] = [];
 
     for (const name of collection.listSchematicNames()) {
       const schematic = workflow.engine.createSchematic(name, collection);
-      const description = schematic.description as typeof schematic.description & {
-        version?: string;
-      };
+      const description = schematic.description as MigrationSchematicDescription;
+
       description.version = coerceVersionNumber(description.version);
       if (!description.version) {
         continue;
       }
 
       if (semver.satisfies(description.version, migrationRange, { includePrerelease: true })) {
-        migrations.push(description as typeof schematic.description & { version: string });
+        (description.optional ? optionalMigrations : requiredMigrations).push(
+          description as MigrationSchematicDescriptionWithVersion,
+        );
       }
     }
 
-    if (migrations.length === 0) {
+    if (requiredMigrations.length === 0 && optionalMigrations.length === 0) {
       return 0;
     }
 
-    migrations.sort((a, b) => semver.compare(a.version, b.version) || a.name.localeCompare(b.name));
+    // Required migrations
+    if (requiredMigrations.length) {
+      this.context.logger.info(
+        colors.cyan(`** Executing migrations of package '${packageName}' **\n`),
+      );
 
-    this.context.logger.info(
-      colors.cyan(`** Executing migrations of package '${packageName}' **\n`),
-    );
+      requiredMigrations.sort(
+        (a, b) => semver.compare(a.version, b.version) || a.name.localeCompare(b.name),
+      );
 
-    return this.executePackageMigrations(workflow, migrations, packageName, commit);
+      const result = await this.executePackageMigrations(
+        workflow,
+        requiredMigrations,
+        packageName,
+        commit,
+      );
+
+      if (result === 1) {
+        return 1;
+      }
+    }
+
+    // Optional migrations
+    if (optionalMigrations.length) {
+      this.context.logger.info(
+        colors.magenta(`** Optional migrations of package '${packageName}' **\n`),
+      );
+
+      optionalMigrations.sort(
+        (a, b) => semver.compare(a.version, b.version) || a.name.localeCompare(b.name),
+      );
+
+      const migrationsToRun = await this.getOptionalMigrationsToRun(
+        optionalMigrations,
+        packageName,
+      );
+
+      if (migrationsToRun?.length) {
+        return this.executePackageMigrations(workflow, migrationsToRun, packageName, commit);
+      }
+    }
+
+    return 0;
   }
 
   private async executePackageMigrations(
     workflow: NodeWorkflow,
-    migrations: Iterable<{ name: string; description: string; collection: { name: string } }>,
+    migrations: MigrationSchematicDescription[],
     packageName: string,
     commit = false,
-  ): Promise<number> {
+  ): Promise<1 | 0> {
     const { logger } = this.context;
     for (const migration of migrations) {
-      const [title, ...description] = migration.description.split('. ');
+      const { title, description } = getMigrationTitleAndDescription(migration);
 
-      logger.info(
-        colors.cyan(colors.symbols.pointer) +
-          ' ' +
-          colors.bold(title.endsWith('.') ? title : title + '.'),
-      );
+      logger.info(colors.cyan(colors.symbols.pointer) + ' ' + colors.bold(title));
 
-      if (description.length) {
-        logger.info('  ' + description.join('.\n  '));
+      if (description) {
+        logger.info('  ' + description);
       }
 
-      const result = await this.executeSchematic(
+      const { success, files } = await this.executeSchematic(
         workflow,
         migration.collection.name,
         migration.name,
       );
-      if (!result.success) {
+      if (!success) {
         return 1;
       }
 
-      logger.info('  Migration completed.');
+      let modifiedFilesText: string;
+      switch (files.size) {
+        case 0:
+          modifiedFilesText = 'No changes made';
+          break;
+        case 1:
+          modifiedFilesText = '1 file modified';
+          break;
+        default:
+          modifiedFilesText = `${files.size} files modified`;
+          break;
+      }
+
+      logger.info(`  Migration completed (${modifiedFilesText}).`);
 
       // Commit migration
       if (commit) {
@@ -1002,6 +1066,50 @@ export class UpdateCommandModule extends CommandModule<UpdateCommandArgs> {
 
     return false;
   }
+
+  private async getOptionalMigrationsToRun(
+    optionalMigrations: MigrationSchematicDescription[],
+    packageName: string,
+  ): Promise<MigrationSchematicDescription[] | undefined> {
+    const { logger } = this.context;
+    const numberOfMigrations = optionalMigrations.length;
+    logger.info(
+      `This package has ${numberOfMigrations} optional migration${
+        numberOfMigrations > 1 ? 's' : ''
+      } that can be executed.`,
+    );
+    logger.info(''); // Extra trailing newline.
+
+    if (!isTTY()) {
+      for (const migration of optionalMigrations) {
+        const { title } = getMigrationTitleAndDescription(migration);
+        logger.info(colors.cyan(colors.symbols.pointer) + ' ' + colors.bold(title));
+        logger.info(
+          colors.gray(`  ng update ${packageName} --migration-only --name ${migration.name}`),
+        );
+        logger.info(''); // Extra trailing newline.
+      }
+
+      return undefined;
+    }
+
+    const answer = await askChoices(
+      `Select the migrations that you'd like to run`,
+      optionalMigrations.map((migration) => {
+        const { title } = getMigrationTitleAndDescription(migration);
+
+        return {
+          name: title,
+          value: migration.name,
+        };
+      }),
+      null,
+    );
+
+    logger.info(''); // Extra trailing newline.
+
+    return optionalMigrations.filter(({ name }) => answer?.includes(name));
+  }
 }
 
 /**
@@ -1064,4 +1172,16 @@ function coerceVersionNumber(version: string | undefined): string | undefined {
   }
 
   return semver.valid(version) ?? undefined;
+}
+
+function getMigrationTitleAndDescription(migration: MigrationSchematicDescription): {
+  title: string;
+  description: string;
+} {
+  const [title, ...description] = migration.description.split('. ');
+
+  return {
+    title: title.endsWith('.') ? title : title + '.',
+    description: description.join('.\n  '),
+  };
 }

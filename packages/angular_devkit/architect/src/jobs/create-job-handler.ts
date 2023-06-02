@@ -7,8 +7,17 @@
  */
 
 import { BaseException, JsonValue, isPromise, logging } from '@angular-devkit/core';
-import { Observable, Observer, Subject, Subscription, from, isObservable, of } from 'rxjs';
-import { switchMap, tap } from 'rxjs/operators';
+import {
+  Observable,
+  Observer,
+  Subject,
+  Subscription,
+  from,
+  isObservable,
+  of,
+  switchMap,
+  tap,
+} from 'rxjs';
 import {
   JobDescription,
   JobHandler,
@@ -35,6 +44,7 @@ export interface SimpleJobHandlerContext<
 > extends JobHandlerContext<A, I, O> {
   createChannel: (name: string) => Observer<JsonValue>;
   input: Observable<I>;
+  addTeardown(teardown: () => Promise<void> | void): void;
 }
 
 /**
@@ -63,6 +73,8 @@ export function createJobHandler<A extends JsonValue, I extends JsonValue, O ext
     const inboundBus = context.inboundBus;
     const inputChannel = new Subject<I>();
     let subscription: Subscription;
+    const teardownLogics: Array<() => PromiseLike<void> | void> = [];
+    let tearingDown = false;
 
     return new Observable<JobOutboundMessage<O>>((subject) => {
       function complete() {
@@ -82,13 +94,22 @@ export function createJobHandler<A extends JsonValue, I extends JsonValue, O ext
             break;
 
           case JobInboundMessageKind.Stop:
-            // There's no way to cancel a promise or a synchronous function, but we do cancel
-            // observables where possible.
-            complete();
+            // Run teardown logic then complete.
+            tearingDown = true;
+            if (teardownLogics.length) {
+              Promise.all(teardownLogics.map((fn) => fn())).then(
+                () => complete(),
+                () => complete(),
+              );
+            } else {
+              complete();
+            }
             break;
 
           case JobInboundMessageKind.Input:
-            inputChannel.next(message.value);
+            if (!tearingDown) {
+              inputChannel.next(message.value);
+            }
             break;
         }
       });
@@ -99,6 +120,9 @@ export function createJobHandler<A extends JsonValue, I extends JsonValue, O ext
       const newContext: SimpleJobHandlerContext<A, I, O> = {
         ...context,
         input: inputChannel.asObservable(),
+        addTeardown(teardown: () => Promise<void> | void): void {
+          teardownLogics.push(teardown);
+        },
         createChannel(name: string) {
           if (channels.has(name)) {
             throw new ChannelAlreadyExistException(name);

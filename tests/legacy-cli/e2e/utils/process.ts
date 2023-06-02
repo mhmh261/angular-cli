@@ -1,10 +1,8 @@
 import * as ansiColors from 'ansi-colors';
 import { spawn, SpawnOptions } from 'child_process';
 import * as child_process from 'child_process';
-import { concat, defer, EMPTY, from } from 'rxjs';
-import { repeat, takeLast } from 'rxjs/operators';
+import { concat, defer, EMPTY, from, lastValueFrom, catchError, repeat } from 'rxjs';
 import { getGlobalVariable, getGlobalVariablesEnv } from './env';
-import { catchError } from 'rxjs/operators';
 import treeKill from 'tree-kill';
 import { delimiter, join, resolve } from 'path';
 
@@ -16,7 +14,12 @@ interface ExecOptions {
   cwd?: string;
 }
 
-const NPM_CONFIG_RE = /^(npm_config_|yarn_|no_update_notifier)/i;
+/**
+ * While `NPM_CONFIG_` and `YARN_` are case insensitive we filter based on case.
+ * This is because when invoking a command using `yarn` it will add a bunch of these variables in lower case.
+ * This causes problems when we try to update the variables during the test setup.
+ */
+const NPM_CONFIG_RE = /^(NPM_CONFIG_|YARN_|NO_UPDATE_NOTIFIER)/;
 
 let _processes: child_process.ChildProcess[] = [];
 
@@ -31,6 +34,7 @@ function _exec(options: ExecOptions, cmd: string, args: string[]): Promise<Proce
 
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
+
   console.log(
     `==========================================================================================`,
   );
@@ -167,7 +171,23 @@ export function extractNpmEnv() {
 
 function extractCIEnv(): NodeJS.ProcessEnv {
   return Object.keys(process.env)
-    .filter((v) => v.startsWith('SAUCE_') || v === 'CI' || v === 'CIRCLECI' || v === 'CHROME_BIN')
+    .filter(
+      (v) =>
+        v.startsWith('SAUCE_') ||
+        v === 'CI' ||
+        v === 'CIRCLECI' ||
+        v === 'CHROME_BIN' ||
+        v === 'CHROMEDRIVER_BIN',
+    )
+    .reduce<NodeJS.ProcessEnv>((vars, n) => {
+      vars[n] = process.env[n];
+      return vars;
+    }, {});
+}
+
+function extractNgEnv() {
+  return Object.keys(process.env)
+    .filter((v) => v.startsWith('NG_'))
     .reduce<NodeJS.ProcessEnv>((vars, n) => {
       vars[n] = process.env[n];
       return vars;
@@ -216,13 +236,13 @@ export async function killAllProcesses(signal = 'SIGTERM'): Promise<void> {
 
   while (_processes.length) {
     const childProc = _processes.pop();
-    if (!childProc) {
+    if (!childProc || childProc.pid === undefined) {
       continue;
     }
 
     processesToKill.push(
       new Promise<void>((resolve) => {
-        treeKill(childProc.pid, signal, () => {
+        treeKill(childProc.pid!, signal, () => {
           // Ignore all errors.
           // This is due to a race condition with the `waitForMatch` logic.
           // where promises are resolved on matches and not when the process terminates.
@@ -277,15 +297,15 @@ export function execAndWaitForOutputToMatch(
     // happened just before the build (e.g. `git clean`).
     // This seems to be due to host file system differences, see
     // https://nodejs.org/docs/latest/api/fs.html#fs_caveats
-    return concat(
-      from(_exec({ waitForMatch: match, env }, cmd, args)),
-      defer(() => waitForAnyProcessOutputToMatch(match, 2500)).pipe(
-        repeat(20),
-        catchError(() => EMPTY),
+    return lastValueFrom(
+      concat(
+        from(_exec({ waitForMatch: match, env }, cmd, args)),
+        defer(() => waitForAnyProcessOutputToMatch(match, 2500)).pipe(
+          repeat(20),
+          catchError(() => EMPTY),
+        ),
       ),
-    )
-      .pipe(takeLast(1))
-      .toPromise();
+    );
   } else {
     return _exec({ waitForMatch: match, env }, cmd, args);
   }
@@ -345,7 +365,7 @@ export function globalNpm(args: string[], env?: NodeJS.ProcessEnv) {
     );
   }
 
-  return _exec({ silent: true, env }, 'node', [require.resolve('npm'), ...args]);
+  return _exec({ silent: true, env }, process.execPath, [require.resolve('npm'), ...args]);
 }
 
 export function npm(...args: string[]) {
@@ -353,15 +373,15 @@ export function npm(...args: string[]) {
 }
 
 export function node(...args: string[]) {
-  return _exec({}, 'node', args);
+  return _exec({}, process.execPath, args);
 }
 
 export function git(...args: string[]) {
-  return _exec({}, 'git', args);
+  return _exec({}, process.env.GIT_BIN || 'git', args);
 }
 
 export function silentGit(...args: string[]) {
-  return _exec({ silent: true }, 'git', args);
+  return _exec({ silent: true }, process.env.GIT_BIN || 'git', args);
 }
 
 /**
@@ -372,24 +392,38 @@ export function silentGit(...args: string[]) {
  * registry (not the test runner or standard global node_modules).
  */
 export async function launchTestProcess(entry: string, ...args: any[]): Promise<void> {
+  // NOTE: do NOT use the bazel TEST_TMPDIR. When sandboxing is not enabled the
+  // TEST_TMPDIR is not sandboxed and has symlinks into the src dir in a
+  // parent directory. Symlinks into the src dir will include package.json,
+  // .git and other files/folders that may effect e2e tests.
+
   const tempRoot: string = getGlobalVariable('tmp-root');
+  const TEMP = process.env.TEMP ?? process.env.TMPDIR ?? tempRoot;
 
   // Extract explicit environment variables for the test process.
   const env: NodeJS.ProcessEnv = {
+    TEMP,
+    TMPDIR: TEMP,
+    HOME: TEMP,
+
+    // Use BAZEL_TARGET as a metadata variable to show it is a
+    // process managed by bazel
+    BAZEL_TARGET: process.env.BAZEL_TARGET,
+
     ...extractNpmEnv(),
     ...extractCIEnv(),
+    ...extractNgEnv(),
     ...getGlobalVariablesEnv(),
   };
 
-  // Modify the PATH environment variable...
-  env.PATH = (env.PATH || process.env.PATH)
-    ?.split(delimiter)
-    // Only include paths within the sandboxed test environment or external
-    // non angular-cli paths such as /usr/bin for generic commands.
-    .filter((p) => p.startsWith(tempRoot) || !p.includes('angular-cli'))
+  // Only include paths within the sandboxed test environment or external
+  // non angular-cli paths such as /usr/bin for generic commands.
+  env.PATH = process.env
+    .PATH!.split(delimiter)
+    .filter((p) => p.startsWith(tempRoot) || p.startsWith(TEMP) || !p.includes('angular-cli'))
     .join(delimiter);
 
-  const testProcessArgs = [resolve(__dirname, 'run_test_process'), entry, ...args];
+  const testProcessArgs = [resolve(__dirname, 'test_process'), entry, ...args];
 
   return new Promise<void>((resolve, reject) => {
     spawn(process.execPath, testProcessArgs, {

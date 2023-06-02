@@ -253,9 +253,8 @@ export async function validateWorkspace(data: json.JsonObject, isGlobal: boolean
 
   const { formats } = await import('@angular-devkit/schematics');
   const registry = new json.schema.CoreSchemaRegistry(formats.standardFormats);
-  const validator = await registry.compile(schemaToValidate).toPromise();
-
-  const { success, errors } = await validator(data).toPromise();
+  const validator = await registry.compile(schemaToValidate);
+  const { success, errors } = await validator(data);
   if (!success) {
     throw new json.schema.SchemaValidationException(errors);
   }
@@ -303,7 +302,6 @@ function findProjectByPath(workspace: AngularWorkspace, location: string): strin
   return projects[0][1];
 }
 
-let defaultProjectDeprecationWarningShown = false;
 export function getProjectByCwd(workspace: AngularWorkspace): string | null {
   if (workspace.projects.size === 1) {
     // If there is only one project, return that one.
@@ -313,21 +311,6 @@ export function getProjectByCwd(workspace: AngularWorkspace): string | null {
   const project = findProjectByPath(workspace, process.cwd());
   if (project) {
     return project;
-  }
-
-  const defaultProject = workspace.extensions['defaultProject'];
-  if (defaultProject && typeof defaultProject === 'string') {
-    // If there is a default project name, return it.
-    if (!defaultProjectDeprecationWarningShown) {
-      console.warn(
-        `DEPRECATED: The 'defaultProject' workspace option has been deprecated. ` +
-          `The project to use will be determined from the current working directory.`,
-      );
-
-      defaultProjectDeprecationWarningShown = true;
-    }
-
-    return defaultProject;
   }
 
   return null;

@@ -9,6 +9,7 @@
 import { Architect } from '@angular-devkit/architect';
 import { BrowserBuilderOutput } from '@angular-devkit/build-angular';
 import { join, normalize, virtualFs } from '@angular-devkit/core';
+import { lastValueFrom } from 'rxjs';
 import { createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder deploy url', () => {
@@ -35,23 +36,27 @@ describe('Browser Builder deploy url', () => {
     const run = await architect.scheduleTarget(targetSpec, overrides);
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
-    expect(output.outputPath).not.toBeUndefined();
-    const outputPath = normalize(output.outputPath);
+    expect(output.outputs[0].path).not.toBeUndefined();
+    const outputPath = normalize(output.outputs[0].path);
 
     const fileName = join(outputPath, 'index.html');
     const runtimeFileName = join(outputPath, 'runtime.js');
-    const content = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const content = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content).toContain('deployUrl/main.js');
     const runtimeContent = virtualFs.fileBufferToString(
-      await host.read(normalize(runtimeFileName)).toPromise(),
+      await lastValueFrom(host.read(normalize(runtimeFileName))),
     );
     expect(runtimeContent).toContain('deployUrl/');
 
     const run2 = await architect.scheduleTarget(targetSpec, overrides2);
     const output2 = (await run2.result) as BrowserBuilderOutput;
-    expect(output2.outputPath).toEqual(outputPath); // These should be the same.
+    expect(output2.outputs[0].path).toEqual(outputPath); // These should be the same.
 
-    const content2 = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const content2 = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content2).toContain('http://example.com/some/path/main.js');
 
     await run.stop();

@@ -1,8 +1,6 @@
-import '../lib/bootstrap-local.js';
-
+import semver from 'semver';
 import { ReleaseConfig } from '@angular/ng-dev';
 import packages from '../lib/packages.js';
-import buildPackages from '../scripts/build.js';
 
 const npmPackages = Object.entries(packages.releasePackages).map(([name, { experimental }]) => ({
   name,
@@ -13,7 +11,20 @@ const npmPackages = Object.entries(packages.releasePackages).map(([name, { exper
 export const release: ReleaseConfig = {
   representativeNpmPackage: '@angular/cli',
   npmPackages,
-  buildPackages: () => buildPackages.default(),
+  buildPackages: async () => {
+    // The `performNpmReleaseBuild` function is loaded at runtime to avoid loading additional
+    // files and dependencies unless a build is required.
+    const { performNpmReleaseBuild } = await import('../scripts/build-packages-dist.mjs');
+    return performNpmReleaseBuild();
+  },
+  prereleaseCheck: async (newVersionStr: string) => {
+    const newVersion = new semver.SemVer(newVersionStr);
+    const { assertValidDependencyRanges } = await import(
+      '../scripts/release-checks/dependency-ranges/index.mjs'
+    );
+
+    await assertValidDependencyRanges(newVersion, packages.releasePackages);
+  },
   releaseNotes: {
     groupOrder: [
       '@angular/cli',

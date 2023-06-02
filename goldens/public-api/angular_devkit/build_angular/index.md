@@ -75,8 +75,6 @@ export interface BrowserBuilderOptions {
 export type BrowserBuilderOutput = BuilderOutput & {
     stats: BuildEventStats;
     baseOutputPath: string;
-    outputPaths: string[];
-    outputPath: string;
     outputs: {
         locale?: string;
         path: string;
@@ -107,8 +105,30 @@ export enum CrossOrigin {
     UseCredentials = "use-credentials"
 }
 
-// @public (undocumented)
-export type DevServerBuilderOptions = Schema;
+// @public
+export interface DevServerBuilderOptions {
+    allowedHosts?: string[];
+    browserTarget: string;
+    disableHostCheck?: boolean;
+    forceEsbuild?: boolean;
+    headers?: {
+        [key: string]: string;
+    };
+    hmr?: boolean;
+    host?: string;
+    liveReload?: boolean;
+    open?: boolean;
+    poll?: number;
+    port?: number;
+    proxyConfig?: string;
+    publicHost?: string;
+    servePath?: string;
+    ssl?: boolean;
+    sslCert?: string;
+    sslKey?: string;
+    verbose?: boolean;
+    watch?: boolean;
+}
 
 // @public
 export type DevServerBuilderOutput = DevServerBuildOutput & {
@@ -125,7 +145,7 @@ export function executeBrowserBuilder(options: BrowserBuilderOptions, context: B
 
 // @public
 export function executeDevServerBuilder(options: DevServerBuilderOptions, context: BuilderContext, transforms?: {
-    webpackConfiguration?: ExecutionTransformer<webpack.Configuration>;
+    webpackConfiguration?: ExecutionTransformer<Configuration>;
     logging?: WebpackLoggingCallback;
     indexHtml?: IndexHtmlTransform;
 }): Observable<DevServerBuilderOutput>;
@@ -156,7 +176,7 @@ export function executeServerBuilder(options: ServerBuilderOptions, context: Bui
 export type ExecutionTransformer<T> = (input: T) => T | Promise<T>;
 
 // @public (undocumented)
-export type ExtractI18nBuilderOptions = Schema_2;
+export type ExtractI18nBuilderOptions = Schema;
 
 // @public (undocumented)
 export interface FileReplacement {
@@ -176,6 +196,7 @@ export interface KarmaBuilderOptions {
     browsers?: string;
     codeCoverage?: boolean;
     codeCoverageExclude?: string[];
+    exclude?: string[];
     fileReplacements?: FileReplacement_2[];
     include?: string[];
     inlineStyleLanguage?: InlineStyleLanguage_2;
@@ -247,6 +268,7 @@ export interface ProtractorBuilderOptions {
 // @public (undocumented)
 export interface ServerBuilderOptions {
     assets?: AssetPattern_3[];
+    buildOptimizer?: boolean;
     deleteOutputPath?: boolean;
     // @deprecated
     deployUrl?: string;
@@ -278,7 +300,6 @@ export interface ServerBuilderOptions {
 // @public
 export type ServerBuilderOutput = BuilderOutput & {
     baseOutputPath: string;
-    outputPaths: string[];
     outputPath: string;
     outputs: {
         locale?: string;

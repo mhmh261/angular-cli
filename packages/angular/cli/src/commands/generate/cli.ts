@@ -7,7 +7,12 @@
  */
 
 import { strings } from '@angular-devkit/core';
-import { Argv } from 'yargs';
+import { Collection } from '@angular-devkit/schematics';
+import {
+  FileSystemCollectionDescription,
+  FileSystemSchematicDescription,
+} from '@angular-devkit/schematics/tools';
+import { ArgumentsCamelCase, Argv } from 'yargs';
 import {
   CommandModuleError,
   CommandModuleImplementation,
@@ -20,22 +25,23 @@ import {
 } from '../../command-builder/schematics-command-module';
 import { demandCommandFailureMessage } from '../../command-builder/utilities/command';
 import { Option } from '../../command-builder/utilities/json-schema';
+import { RootCommands } from '../command-config';
 
 interface GenerateCommandArgs extends SchematicsCommandArgs {
   schematic?: string;
 }
 
-export class GenerateCommandModule
+export default class GenerateCommandModule
   extends SchematicsCommandModule
   implements CommandModuleImplementation<GenerateCommandArgs>
 {
   command = 'generate';
-  aliases = 'g';
+  aliases = RootCommands['generate'].aliases;
   describe = 'Generates and/or modifies files based on a schematic.';
   longDescriptionPath?: string | undefined;
 
   override async builder(argv: Argv): Promise<Argv<GenerateCommandArgs>> {
-    let localYargs = (await super.builder(argv)).command<GenerateCommandArgs>({
+    let localYargs = (await super.builder(argv)).command({
       command: '$0 <schematic>',
       describe: 'Run the provided schematic.',
       builder: (localYargs) =>
@@ -46,7 +52,7 @@ export class GenerateCommandModule
             demandOption: true,
           })
           .strict(),
-      handler: (options) => this.handler(options),
+      handler: (options) => this.handler(options as ArgumentsCamelCase<GenerateCommandArgs>),
     });
 
     for (const [schematicName, collectionName] of await this.getSchematicsToRegister()) {
@@ -69,7 +75,6 @@ export class GenerateCommandModule
       const {
         'x-deprecated': xDeprecated,
         description = schematicDescription,
-        aliases = schematicAliases,
         hidden = schematicHidden,
       } = schemaJson;
       const options = await this.getSchematicOptions(collection, schematicName, workflow);
@@ -79,10 +84,19 @@ export class GenerateCommandModule
         // When 'describe' is set to false, it results in a hidden command.
         describe: hidden === true ? false : typeof description === 'string' ? description : '',
         deprecated: xDeprecated === true || typeof xDeprecated === 'string' ? xDeprecated : false,
-        aliases: Array.isArray(aliases) ? (aliases as string[]) : undefined,
+        aliases: Array.isArray(schematicAliases)
+          ? await this.generateCommandAliasesStrings(collectionName, schematicAliases)
+          : undefined,
         builder: (localYargs) => this.addSchemaOptionsToCommand(localYargs, options).strict(),
         handler: (options) =>
-          this.handler({ ...options, schematic: `${collectionName}:${schematicName}` }),
+          this.handler({
+            ...options,
+            schematic: `${collectionName}:${schematicName}`,
+          } as ArgumentsCamelCase<
+            SchematicsCommandArgs & {
+              schematic: string;
+            }
+          >),
       });
     }
 
@@ -120,6 +134,41 @@ export class GenerateCommandModule
     return collectionName ? [collectionName] : [...(await this.getSchematicCollections())];
   }
 
+  private async shouldAddCollectionNameAsPartOfCommand(): Promise<boolean> {
+    const [collectionNameFromArgs] = this.parseSchematicInfo(
+      // positional = [generate, component] or [generate]
+      this.context.args.positional[1],
+    );
+
+    const schematicCollectionsFromConfig = await this.getSchematicCollections();
+    const collectionNames = await this.getCollectionNames();
+
+    // Only add the collection name as part of the command when it's not a known
+    // schematics collection or when it has been provided via the CLI.
+    // Ex:`ng generate @schematics/angular:c`
+    return (
+      !!collectionNameFromArgs ||
+      !collectionNames.some((c) => schematicCollectionsFromConfig.has(c))
+    );
+  }
+
+  /**
+   * Generate an aliases string array to be passed to the command builder.
+   *
+   * @example `[component]` or `[@schematics/angular:component]`.
+   */
+  private async generateCommandAliasesStrings(
+    collectionName: string,
+    schematicAliases: string[],
+  ): Promise<string[]> {
+    // Only add the collection name as part of the command when it's not a known
+    // schematics collection or when it has been provided via the CLI.
+    // Ex:`ng generate @schematics/angular:c`
+    return (await this.shouldAddCollectionNameAsPartOfCommand())
+      ? schematicAliases.map((alias) => `${collectionName}:${alias}`)
+      : schematicAliases;
+  }
+
   /**
    * Generate a command string to be passed to the command builder.
    *
@@ -130,23 +179,14 @@ export class GenerateCommandModule
     schematicName: string,
     options: Option[],
   ): Promise<string> {
-    const [collectionNameFromArgs] = this.parseSchematicInfo(
-      // positional = [generate, component] or [generate]
-      this.context.args.positional[1],
-    );
-
     const dasherizedSchematicName = strings.dasherize(schematicName);
-    const schematicCollectionsFromConfig = await this.getSchematicCollections();
-    const collectionNames = await this.getCollectionNames();
 
     // Only add the collection name as part of the command when it's not a known
     // schematics collection or when it has been provided via the CLI.
     // Ex:`ng generate @schematics/angular:component`
-    const commandName =
-      !!collectionNameFromArgs ||
-      !collectionNames.some((c) => schematicCollectionsFromConfig.has(c))
-        ? collectionName + ':' + dasherizedSchematicName
-        : dasherizedSchematicName;
+    const commandName = (await this.shouldAddCollectionNameAsPartOfCommand())
+      ? collectionName + ':' + dasherizedSchematicName
+      : dasherizedSchematicName;
 
     const positionalArgs = options
       .filter((o) => o.positional !== undefined)
@@ -165,6 +205,7 @@ export class GenerateCommandModule
    */
   private async *getSchematics(): AsyncGenerator<{
     schematicName: string;
+    schematicAliases?: Set<string>;
     collectionName: string;
   }> {
     const seenNames = new Set<string>();
@@ -176,10 +217,37 @@ export class GenerateCommandModule
         // If a schematic with this same name is already registered skip.
         if (!seenNames.has(schematicName)) {
           seenNames.add(schematicName);
-          yield { schematicName, collectionName };
+
+          yield {
+            schematicName,
+            collectionName,
+            schematicAliases: this.listSchematicAliases(collection, schematicName),
+          };
         }
       }
     }
+  }
+
+  private listSchematicAliases(
+    collection: Collection<FileSystemCollectionDescription, FileSystemSchematicDescription>,
+    schematicName: string,
+  ): Set<string> | undefined {
+    const description = collection.description.schematics[schematicName];
+    if (description) {
+      return description.aliases && new Set(description.aliases);
+    }
+
+    // Extended collections
+    if (collection.baseDescriptions) {
+      for (const base of collection.baseDescriptions) {
+        const description = base.schematics[schematicName];
+        if (description) {
+          return description.aliases && new Set(description.aliases);
+        }
+      }
+    }
+
+    return undefined;
   }
 
   /**
@@ -196,8 +264,11 @@ export class GenerateCommandModule
       this.context.args.positional[1],
     );
 
-    for await (const { schematicName, collectionName } of this.getSchematics()) {
-      if (schematicName === schematicNameFromArgs) {
+    for await (const { schematicName, collectionName, schematicAliases } of this.getSchematics()) {
+      if (
+        schematicNameFromArgs &&
+        (schematicName === schematicNameFromArgs || schematicAliases?.has(schematicNameFromArgs))
+      ) {
         return [[schematicName, collectionName]];
       }
 

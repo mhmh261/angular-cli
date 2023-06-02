@@ -20,7 +20,6 @@ ts_library(
         include = ["src/**/*.ts"],
         exclude = [
             "src/**/*_spec.ts",
-            "src/**/*_benchmark.ts",
         ],
     ),
     data = glob(
@@ -83,12 +82,12 @@ genrule(
 
 pkg_npm(
     name = "npm_package",
+    tags = ["release-package"],
     deps = [
         ":README.md",
         ":core",
         ":license",
         "//packages/angular_devkit/core/node",
-        "//packages/angular_devkit/core/node:package.json",
         "//packages/angular_devkit/core/node/testing",
     ],
 )

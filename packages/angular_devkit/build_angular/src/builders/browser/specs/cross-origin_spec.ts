@@ -9,6 +9,7 @@
 import { Architect } from '@angular-devkit/architect';
 import { BrowserBuilderOutput, CrossOrigin } from '@angular-devkit/build-angular';
 import { join, normalize, virtualFs } from '@angular-devkit/core';
+import { lastValueFrom } from 'rxjs';
 import { createArchitect, host } from '../../../testing/test-utils';
 
 describe('Browser Builder crossOrigin', () => {
@@ -34,8 +35,10 @@ describe('Browser Builder crossOrigin', () => {
     const run = await architect.scheduleTarget(targetSpec, overrides);
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
-    const fileName = join(normalize(output.outputPath), 'index.html');
-    const content = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const fileName = join(normalize(output.outputs[0].path), 'index.html');
+    const content = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content).toBe(
       `<html><head><base href="/"><link rel="stylesheet" href="styles.css" crossorigin="use-credentials"></head>` +
         `<body><app-root></app-root>` +
@@ -52,8 +55,10 @@ describe('Browser Builder crossOrigin', () => {
     const run = await architect.scheduleTarget(targetSpec, overrides);
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
-    const fileName = join(normalize(output.outputPath), 'index.html');
-    const content = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const fileName = join(normalize(output.outputs[0].path), 'index.html');
+    const content = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content).toBe(
       `<html><head><base href="/">` +
         `<link rel="stylesheet" href="styles.css" crossorigin="anonymous"></head>` +
@@ -71,8 +76,10 @@ describe('Browser Builder crossOrigin', () => {
     const run = await architect.scheduleTarget(targetSpec, overrides);
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
-    const fileName = join(normalize(output.outputPath), 'index.html');
-    const content = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const fileName = join(normalize(output.outputs[0].path), 'index.html');
+    const content = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content).toBe(
       `<html><head><base href="/">` +
         `<link rel="stylesheet" href="styles.css"></head>` +
@@ -96,8 +103,10 @@ describe('Browser Builder crossOrigin', () => {
     const output = (await run.result) as BrowserBuilderOutput;
     expect(output.success).toBe(true);
 
-    const fileName = join(normalize(output.outputPath), 'runtime.js');
-    const content = virtualFs.fileBufferToString(await host.read(normalize(fileName)).toPromise());
+    const fileName = join(normalize(output.outputs[0].path), 'runtime.js');
+    const content = virtualFs.fileBufferToString(
+      await lastValueFrom(host.read(normalize(fileName))),
+    );
     expect(content).toContain('script.crossOrigin = "use-credentials"');
     await run.stop();
   });

@@ -39,6 +39,11 @@ ts_json_schema(
 )
 
 ts_json_schema(
+    name = "jest_schema",
+    src = "src/builders/jest/schema.json",
+)
+
+ts_json_schema(
     name = "karma_schema",
     src = "src/builders/karma/schema.json",
 )
@@ -75,14 +80,15 @@ ts_library(
         ],
     ) + [
         "//packages/angular_devkit/build_angular:src/builders/app-shell/schema.ts",
-        "//packages/angular_devkit/build_angular:src/builders/browser/schema.ts",
         "//packages/angular_devkit/build_angular:src/builders/browser-esbuild/schema.ts",
+        "//packages/angular_devkit/build_angular:src/builders/browser/schema.ts",
         "//packages/angular_devkit/build_angular:src/builders/dev-server/schema.ts",
         "//packages/angular_devkit/build_angular:src/builders/extract-i18n/schema.ts",
+        "//packages/angular_devkit/build_angular:src/builders/jest/schema.ts",
         "//packages/angular_devkit/build_angular:src/builders/karma/schema.ts",
+        "//packages/angular_devkit/build_angular:src/builders/ng-packagr/schema.ts",
         "//packages/angular_devkit/build_angular:src/builders/protractor/schema.ts",
         "//packages/angular_devkit/build_angular:src/builders/server/schema.ts",
-        "//packages/angular_devkit/build_angular:src/builders/ng-packagr/schema.ts",
     ],
     data = glob(
         include = [
@@ -90,6 +96,7 @@ ts_library(
             "builders.json",
             "src/**/schema.json",
             "src/**/*.js",
+            "src/**/*.mjs",
             "src/**/*.html",
         ],
     ),
@@ -111,6 +118,7 @@ ts_library(
         "@npm//@babel/core",
         "@npm//@babel/generator",
         "@npm//@babel/helper-annotate-as-pure",
+        "@npm//@babel/helper-split-export-declaration",
         "@npm//@babel/plugin-proposal-async-generator-functions",
         "@npm//@babel/plugin-transform-async-to-generator",
         "@npm//@babel/plugin-transform-runtime",
@@ -122,14 +130,15 @@ ts_library(
         "@npm//@types/babel__template",
         "@npm//@types/browserslist",
         "@npm//@types/cacache",
-        "@npm//@types/glob",
         "@npm//@types/inquirer",
         "@npm//@types/karma",
+        "@npm//@types/less",
         "@npm//@types/loader-utils",
         "@npm//@types/node",
-        "@npm//@types/parse5-html-rewriting-stream",
+        "@npm//@types/picomatch",
         "@npm//@types/semver",
         "@npm//@types/text-table",
+        "@npm//@vitejs/plugin-basic-ssl",
         "@npm//ajv",
         "@npm//ansi-colors",
         "@npm//autoprefixer",
@@ -143,7 +152,7 @@ ts_library(
         "@npm//css-loader",
         "@npm//esbuild",
         "@npm//esbuild-wasm",
-        "@npm//glob",
+        "@npm//fast-glob",
         "@npm//https-proxy-agent",
         "@npm//inquirer",
         "@npm//jsonc-parser",
@@ -155,6 +164,7 @@ ts_library(
         "@npm//loader-utils",
         "@npm//magic-string",
         "@npm//mini-css-extract-plugin",
+        "@npm//mrmime",
         "@npm//ng-packagr",
         "@npm//open",
         "@npm//ora",
@@ -174,6 +184,7 @@ ts_library(
         "@npm//tree-kill",
         "@npm//tslib",
         "@npm//typescript",
+        "@npm//vite",
         "@npm//webpack",
         "@npm//webpack-dev-middleware",
         "@npm//webpack-dev-server",
@@ -233,6 +244,7 @@ pkg_npm(
         "//packages/angular_devkit/core:package.json",
         "//packages/ngtools/webpack:package.json",
     ],
+    tags = ["release-package"],
     deps = [
         ":README.md",
         ":build_angular",
@@ -262,7 +274,7 @@ ts_library(
             "src/**/tests/*.ts",
         ],
         exclude = [
-            "src/testing/**/*_spec.ts",
+            "src/**/*_spec.ts",
         ],
     ),
     data = glob(["test/**/*"]),
@@ -336,7 +348,17 @@ LARGE_SPECS = {
             "@npm//popper.js",
         ],
     },
-    "browser-esbuild": {},
+    "browser-esbuild": {
+        "shards": 10,
+        "extra_deps": [
+            "@npm//buffer",
+        ],
+    },
+    "jest": {
+        "extra_deps": [
+            "@npm//fast-glob",
+        ],
+    },
 }
 
 [

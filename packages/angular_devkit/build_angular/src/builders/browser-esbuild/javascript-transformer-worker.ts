@@ -20,6 +20,7 @@ interface JavaScriptTransformRequest {
   advancedOptimizations: boolean;
   forceAsyncTransformation?: boolean;
   skipLinker: boolean;
+  jit: boolean;
 }
 
 export default async function transformJavaScript(
@@ -42,7 +43,7 @@ async function transformWithBabel({
 }: JavaScriptTransformRequest): Promise<string> {
   const forceAsyncTransformation =
     options.forceAsyncTransformation ??
-    (!/[\\/][_f]?esm2015[\\/]/.test(filename) && /async\s+function\s*\*/.test(data));
+    (!/[\\/][_f]?esm2015[\\/]/.test(filename) && /async(?:\s+function)?\s*\*/.test(data));
   const shouldLink = !options.skipLinker && (await requiresLinking(filename, data));
   const useInputSourcemap =
     options.sourcemap &&
@@ -54,7 +55,10 @@ async function transformWithBabel({
     return useInputSourcemap ? data : data.replace(/^\/\/# sourceMappingURL=[^\r\n]*/gm, '');
   }
 
-  const angularPackage = /[\\/]node_modules[\\/]@angular[\\/]/.test(filename);
+  // @angular/platform-server/init entry-point has side-effects.
+  const safeAngularPackage =
+    /[\\/]node_modules[\\/]@angular[\\/]/.test(filename) &&
+    !/@angular[\\/]platform-server[\\/]f?esm2022[\\/]init/.test(filename);
 
   // Lazy load the linker plugin only when linking is required
   if (shouldLink) {
@@ -68,7 +72,7 @@ async function transformWithBabel({
   const result = await transformAsync(data, {
     filename,
     inputSourceMap: (useInputSourcemap ? undefined : false) as undefined,
-    sourceMaps: options.sourcemap ? 'inline' : false,
+    sourceMaps: useInputSourcemap ? 'inline' : false,
     compact: false,
     configFile: false,
     babelrc: false,
@@ -80,18 +84,23 @@ async function transformWithBabel({
         {
           angularLinker: linkerPluginCreator && {
             shouldLink,
-            jitMode: false,
+            jitMode: options.jit,
             linkerPluginCreator,
           },
           forceAsyncTransformation,
           optimize: options.advancedOptimizations && {
-            looseEnums: angularPackage,
-            pureTopLevel: angularPackage,
+            pureTopLevel: safeAngularPackage,
           },
         },
       ],
     ],
   });
 
-  return result?.code ?? data;
+  const outputCode = result?.code ?? data;
+
+  // Strip sourcemaps if they should not be used.
+  // Babel will keep the original comments even if sourcemaps are disabled.
+  return useInputSourcemap
+    ? outputCode
+    : outputCode.replace(/^\/\/# sourceMappingURL=[^\r\n]*/gm, '');
 }

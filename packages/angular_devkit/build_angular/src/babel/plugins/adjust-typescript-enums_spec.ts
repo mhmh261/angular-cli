@@ -12,19 +12,11 @@ import { default as adjustTypeScriptEnums } from './adjust-typescript-enums';
 // eslint-disable-next-line import/no-extraneous-dependencies
 const prettier = require('prettier');
 
-function testCase({
-  input,
-  expected,
-  options,
-}: {
-  input: string;
-  expected: string;
-  options?: { loose?: boolean };
-}): void {
+function testCase({ input, expected }: { input: string; expected: string }): void {
   const result = transform(input, {
     configFile: false,
     babelrc: false,
-    plugins: [[adjustTypeScriptEnums, options]],
+    plugins: [[adjustTypeScriptEnums]],
   });
   if (!result) {
     fail('Expected babel to return a transform result.');
@@ -51,10 +43,9 @@ describe('adjust-typescript-enums Babel plugin', () => {
       `,
       expected: `
         var ChangeDetectionStrategy = /*#__PURE__*/ (() => {
-          (function (ChangeDetectionStrategy) {
-              ChangeDetectionStrategy[ChangeDetectionStrategy["OnPush"] = 0] = "OnPush";
-              ChangeDetectionStrategy[ChangeDetectionStrategy["Default"] = 1] = "Default";
-          })(ChangeDetectionStrategy || (ChangeDetectionStrategy = {}));
+          ChangeDetectionStrategy = ChangeDetectionStrategy || {};
+          ChangeDetectionStrategy[(ChangeDetectionStrategy["OnPush"] = 0)] = "OnPush";
+          ChangeDetectionStrategy[(ChangeDetectionStrategy["Default"] = 1)] = "Default";
           return ChangeDetectionStrategy;
         })();
       `,
@@ -72,10 +63,9 @@ describe('adjust-typescript-enums Babel plugin', () => {
       `,
       expected: `
         export var ChangeDetectionStrategy = /*#__PURE__*/ (() => {
-          (function (ChangeDetectionStrategy) {
-              ChangeDetectionStrategy[ChangeDetectionStrategy["OnPush"] = 0] = "OnPush";
-              ChangeDetectionStrategy[ChangeDetectionStrategy["Default"] = 1] = "Default";
-          })(ChangeDetectionStrategy || (ChangeDetectionStrategy = {}));
+          ChangeDetectionStrategy = ChangeDetectionStrategy || {};
+          ChangeDetectionStrategy[(ChangeDetectionStrategy["OnPush"] = 0)] = "OnPush";
+          ChangeDetectionStrategy[(ChangeDetectionStrategy["Default"] = 1)] = "Default";
           return ChangeDetectionStrategy;
         })();
       `,
@@ -93,10 +83,9 @@ describe('adjust-typescript-enums Babel plugin', () => {
       `,
       expected: `
         export var ChangeDetectionStrategy = /*#__PURE__*/ (() => {
-          (function (ChangeDetectionStrategy) {
-              ChangeDetectionStrategy[ChangeDetectionStrategy["OnPush"] = 5] = "OnPush";
-              ChangeDetectionStrategy[ChangeDetectionStrategy["Default"] = 8] = "Default";
-          })(ChangeDetectionStrategy || (ChangeDetectionStrategy = {}));
+          ChangeDetectionStrategy = ChangeDetectionStrategy || {};
+          ChangeDetectionStrategy[(ChangeDetectionStrategy["OnPush"] = 5)] = "OnPush";
+          ChangeDetectionStrategy[(ChangeDetectionStrategy["Default"] = 8)] = "Default";
           return ChangeDetectionStrategy;
         })();
       `,
@@ -106,20 +95,19 @@ describe('adjust-typescript-enums Babel plugin', () => {
   it('wraps string-based TypeScript enums', () => {
     testCase({
       input: `
-        var NotificationKind;
-        (function (NotificationKind) {
-            NotificationKind["NEXT"] = "N";
-            NotificationKind["ERROR"] = "E";
-            NotificationKind["COMPLETE"] = "C";
-        })(NotificationKind || (NotificationKind = {}));
+      var NotificationKind;
+      (function (NotificationKind) {
+          NotificationKind["NEXT"] = "N";
+          NotificationKind["ERROR"] = "E";
+          NotificationKind["COMPLETE"] = "C";
+      })(NotificationKind || (NotificationKind = {}));
       `,
       expected: `
         var NotificationKind = /*#__PURE__*/ (() => {
-          (function (NotificationKind) {
-              NotificationKind["NEXT"] = "N";
-              NotificationKind["ERROR"] = "E";
-              NotificationKind["COMPLETE"] = "C";
-          })(NotificationKind || (NotificationKind = {}));
+          NotificationKind = NotificationKind || {};
+          NotificationKind["NEXT"] = "N";
+          NotificationKind["ERROR"] = "E";
+          NotificationKind["COMPLETE"] = "C";
           return NotificationKind;
         })();
       `,
@@ -173,15 +161,14 @@ describe('adjust-typescript-enums Babel plugin', () => {
          * @deprecated use @angular/common/http instead
          */
         var RequestMethod = /*#__PURE__*/ (() => {
-          (function (RequestMethod) {
-              RequestMethod[RequestMethod["Get"] = 0] = "Get";
-              RequestMethod[RequestMethod["Post"] = 1] = "Post";
-              RequestMethod[RequestMethod["Put"] = 2] = "Put";
-              RequestMethod[RequestMethod["Delete"] = 3] = "Delete";
-              RequestMethod[RequestMethod["Options"] = 4] = "Options";
-              RequestMethod[RequestMethod["Head"] = 5] = "Head";
-              RequestMethod[RequestMethod["Patch"] = 6] = "Patch";
-          })(RequestMethod || (RequestMethod = {}));
+          RequestMethod = RequestMethod || {};
+          RequestMethod[(RequestMethod["Get"] = 0)] = "Get";
+          RequestMethod[(RequestMethod["Post"] = 1)] = "Post";
+          RequestMethod[(RequestMethod["Put"] = 2)] = "Put";
+          RequestMethod[(RequestMethod["Delete"] = 3)] = "Delete";
+          RequestMethod[(RequestMethod["Options"] = 4)] = "Options";
+          RequestMethod[(RequestMethod["Head"] = 5)] = "Head";
+          RequestMethod[(RequestMethod["Patch"] = 6)] = "Patch";
           return RequestMethod;
         })();
       `,
@@ -211,7 +198,7 @@ describe('adjust-typescript-enums Babel plugin', () => {
     `);
   });
 
-  it('wraps TypeScript enums in loose mode', () => {
+  it('wraps TypeScript enums', () => {
     testCase({
       input: `
         var ChangeDetectionStrategy;
@@ -228,23 +215,19 @@ describe('adjust-typescript-enums Babel plugin', () => {
           return ChangeDetectionStrategy;
         })();
       `,
-      options: { loose: true },
     });
   });
 
-  it(
-    'should not wrap TypeScript enums in loose mode if the declaration identifier has been ' +
-      'renamed to avoid collisions',
-    () => {
-      testCase({
-        input: `
+  it('should not wrap TypeScript enums if the declaration identifier has been renamed to avoid collisions', () => {
+    testCase({
+      input: `
         var ChangeDetectionStrategy$1;
         (function (ChangeDetectionStrategy) {
             ChangeDetectionStrategy[ChangeDetectionStrategy["OnPush"] = 0] = "OnPush";
             ChangeDetectionStrategy[ChangeDetectionStrategy["Default"] = 1] = "Default";
         })(ChangeDetectionStrategy$1 || (ChangeDetectionStrategy$1 = {}));
       `,
-        expected: `
+      expected: `
         var ChangeDetectionStrategy$1 = /*#__PURE__*/ (() => {
           (function (ChangeDetectionStrategy) {
             ChangeDetectionStrategy[(ChangeDetectionStrategy["OnPush"] = 0)] = "OnPush";
@@ -253,8 +236,6 @@ describe('adjust-typescript-enums Babel plugin', () => {
           return ChangeDetectionStrategy$1;
         })();
       `,
-        options: { loose: true },
-      });
-    },
-  );
+    });
+  });
 });

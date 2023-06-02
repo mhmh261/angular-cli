@@ -1,14 +1,13 @@
-import { logging } from '../../packages/angular_devkit/core/src';
 import { createConsoleLogger } from '../../packages/angular_devkit/core/node';
-import * as colors from 'ansi-colors';
-import glob from 'glob';
+import colors from 'ansi-colors';
+import glob from 'fast-glob';
 import yargsParser from 'yargs-parser';
 import * as path from 'path';
 import { getGlobalVariable, setGlobalVariable } from './e2e/utils/env';
 import { gitClean } from './e2e/utils/git';
 import { createNpmRegistry } from './e2e/utils/registry';
 import { launchTestProcess } from './e2e/utils/process';
-import { join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import { findFreePort } from './e2e/utils/network';
 import { extractFile } from './e2e/utils/tar';
 import { realpathSync } from 'fs';
@@ -56,11 +55,20 @@ const argv = yargsParser(process.argv.slice(2), {
   number: ['nb-shards', 'shard'],
   array: ['package'],
   configuration: {
-    'dot-notation': false,
     'camel-case-expansion': false,
+    'dot-notation': false,
   },
   default: {
     'package': ['./dist/_*.tgz'],
+    'debug': !!process.env.BUILD_WORKSPACE_DIRECTORY,
+    'glob': process.env.TESTBRIDGE_TEST_ONLY,
+    'nb-shards':
+      Number(process.env.E2E_SHARD_TOTAL ?? 1) * Number(process.env.TEST_TOTAL_SHARDS ?? 1) || 1,
+    'shard':
+      process.env.E2E_SHARD_INDEX === undefined && process.env.TEST_SHARD_INDEX === undefined
+        ? undefined
+        : Number(process.env.E2E_SHARD_INDEX ?? 0) * Number(process.env.TEST_TOTAL_SHARDS ?? 1) +
+          Number(process.env.TEST_SHARD_INDEX ?? 0),
   },
 });
 
@@ -80,6 +88,20 @@ process.exitCode = 255;
  */
 process.env.LEGACY_CLI_RUNNER = '1';
 
+/**
+ * Add external git toolchain onto PATH
+ */
+if (process.env.GIT_BIN) {
+  process.env.PATH = process.env.PATH! + delimiter + dirname(process.env.GIT_BIN!);
+}
+
+/**
+ * Add external browser toolchains onto PATH
+ */
+if (process.env.CHROME_BIN) {
+  process.env.PATH = process.env.PATH! + delimiter + dirname(process.env.CHROME_BIN!);
+}
+
 const logger = createConsoleLogger(argv.verbose, process.stdout, process.stderr, {
   info: (s) => s,
   debug: (s) => s,
@@ -93,17 +115,23 @@ function lastLogger() {
   return logStack[logStack.length - 1];
 }
 
-const testGlob = argv.glob || 'tests/**/*.ts';
+// Under bazel the compiled file (.js) and types (.d.ts) are available.
+const SRC_FILE_EXT_RE = /\.js$/;
+const testGlob = argv.glob?.replace(/\.ts$/, '.js') || `tests/**/*.js`;
 
 const e2eRoot = path.join(__dirname, 'e2e');
-const allSetups = glob.sync('setup/**/*.ts', { nodir: true, cwd: e2eRoot }).sort();
-const allInitializers = glob.sync('initialize/**/*.ts', { nodir: true, cwd: e2eRoot }).sort();
+const allSetups = glob.sync(`setup/**/*.js`, { cwd: e2eRoot }).sort();
+const allInitializers = glob.sync(`initialize/**/*.js`, { cwd: e2eRoot }).sort();
+
 const allTests = glob
-  .sync(testGlob, { nodir: true, cwd: e2eRoot, ignore: argv.ignore })
+  .sync(testGlob, { cwd: e2eRoot, ignore: argv.ignore })
   // Replace windows slashes.
   .map((name) => name.replace(/\\/g, '/'))
   .filter((name) => {
-    if (name.endsWith('/setup.ts')) {
+    if (name.endsWith('/setup.js')) {
+      return false;
+    }
+    if (!SRC_FILE_EXT_RE.test(name)) {
       return false;
     }
 
@@ -122,8 +150,8 @@ const allTests = glob
   })
   .sort();
 
-const shardId = 'shard' in argv ? argv['shard'] : null;
-const nbShards = (shardId === null ? 1 : argv['nb-shards']) || 2;
+const shardId = argv['shard'] !== undefined ? Number(argv['shard']) : null;
+const nbShards = shardId === null ? 1 : Number(argv['nb-shards']);
 const tests = allTests.filter((name) => {
   // Check for naming tests on command line.
   if (argv._.length == 0) {
@@ -134,7 +162,7 @@ const tests = allTests.filter((name) => {
     return (
       path.join(process.cwd(), argName + '') == path.join(__dirname, 'e2e', name) ||
       argName == name ||
-      argName == name.replace(/\.ts$/, '')
+      argName == name.replace(SRC_FILE_EXT_RE, '')
     );
   });
 });
@@ -143,7 +171,7 @@ const tests = allTests.filter((name) => {
 const testsToRun = tests.filter((name, i) => shardId === null || i % nbShards == shardId);
 
 if (testsToRun.length === 0) {
-  if (shardId !== null && tests.length >= shardId ? 1 : 0) {
+  if (shardId !== null && tests.length <= shardId) {
     console.log(`No tests to run on shard ${shardId}, exiting.`);
     process.exit(0);
   } else {
@@ -170,9 +198,15 @@ console.log(['Tests:', ...testsToRun].join('\n '));
 
 setGlobalVariable('argv', argv);
 setGlobalVariable('package-manager', argv.yarn ? 'yarn' : 'npm');
-// This is needed by karma-chrome-launcher
+
+// Use the chrome supplied by bazel or the puppeteer chrome and webdriver-manager driver outside.
+// This is needed by karma-chrome-launcher, protractor etc.
 // https://github.com/karma-runner/karma-chrome-launcher#headless-chromium-with-puppeteer
-process.env['CHROME_BIN'] = require('puppeteer').executablePath();
+//
+// Resolve from relative paths to absolute paths within the bazel runfiles tree
+// so subprocesses spawned in a different working directory can still find them.
+process.env.CHROME_BIN = path.resolve(process.env.CHROME_BIN!);
+process.env.CHROMEDRIVER_BIN = path.resolve(process.env.CHROMEDRIVER_BIN!);
 
 Promise.all([findFreePort(), findFreePort(), findPackageTars()])
   .then(async ([httpPort, httpsPort, packageTars]) => {
@@ -237,15 +271,15 @@ async function runSteps(
 
   for (const [stepIndex, relativeName] of steps.entries()) {
     // Make sure this is a windows compatible path.
-    let absoluteName = path.join(e2eRoot, relativeName).replace(/\.ts$/, '');
+    let absoluteName = path.join(e2eRoot, relativeName).replace(SRC_FILE_EXT_RE, '');
     if (/^win/.test(process.platform)) {
       absoluteName = absoluteName.replace(/\\/g, path.posix.sep);
     }
 
-    const name = relativeName.replace(/\.ts$/, '');
+    const name = relativeName.replace(SRC_FILE_EXT_RE, '');
     const start = Date.now();
 
-    printHeader(relativeName, stepIndex, steps.length, type);
+    printHeader(name, stepIndex, steps.length, type);
 
     // Run the test function with the current file on the logStack.
     logStack.push(lastLogger().createChild(absoluteName));
@@ -297,7 +331,7 @@ function printHeader(
   type: 'setup' | 'initializer' | 'test',
 ) {
   const text = `${testIndex + 1} of ${count}`;
-  const fullIndex = testIndex * nbShards + shardId + 1;
+  const fullIndex = testIndex * nbShards + (shardId ?? 0) + 1;
   const shard =
     shardId === null || type !== 'test'
       ? ''
@@ -325,10 +359,21 @@ function printFooter(testName: string, type: 'setup' | 'initializer' | 'test', s
 // Collect the packages passed as arguments and return as {package-name => pkg-path}
 async function findPackageTars(): Promise<{ [pkg: string]: PkgInfo }> {
   const pkgs: string[] = (getGlobalVariable('argv').package as string[]).flatMap((p) =>
-    glob.sync(p, { realpath: true }),
+    glob.sync(p),
   );
 
-  const pkgJsons = await Promise.all(pkgs.map((pkg) => extractFile(pkg, './package/package.json')));
+  const pkgJsons = await Promise.all(
+    pkgs
+      .map((pkg) => realpathSync(pkg))
+      .map(async (pkg) => {
+        try {
+          return await extractFile(pkg, './package/package.json');
+        } catch (e) {
+          // TODO(bazel): currently the bazel npm packaging does not contain the standard npm ./package directory
+          return await extractFile(pkg, './package.json');
+        }
+      }),
+  );
 
   return pkgs.reduce((all, pkg, i) => {
     const json = pkgJsons[i].toString('utf8');

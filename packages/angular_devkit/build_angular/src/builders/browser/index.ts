@@ -10,8 +10,7 @@ import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/ar
 import { EmittedFiles, WebpackLoggingCallback, runWebpack } from '@angular-devkit/build-webpack';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Observable, from } from 'rxjs';
-import { concatMap, map, switchMap } from 'rxjs/operators';
+import { Observable, concatMap, from, map, switchMap } from 'rxjs';
 import webpack, { StatsCompilation } from 'webpack';
 import { ExecutionTransformer } from '../../transforms';
 import {
@@ -66,17 +65,7 @@ import { Schema as BrowserBuilderSchema } from './schema';
  */
 export type BrowserBuilderOutput = BuilderOutput & {
   stats: BuildEventStats;
-
   baseOutputPath: string;
-  /**
-   * @deprecated in version 14. Use 'outputs' instead.
-   */
-  outputPaths: string[];
-  /**
-   * @deprecated in version 9. Use 'outputs' instead.
-   */
-  outputPath: string;
-
   outputs: {
     locale?: string;
     path: string;
@@ -414,8 +403,6 @@ export function buildWebpackBrowser(
                 ...event,
                 stats: generateBuildEventStats(webpackStats, options),
                 baseOutputPath,
-                outputPath: baseOutputPath,
-                outputPaths: (outputPaths && Array.from(outputPaths.values())) || [baseOutputPath],
                 outputs: (outputPaths &&
                   [...outputPaths.entries()].map(([locale, path]) => ({
                     locale,

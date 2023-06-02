@@ -12,6 +12,7 @@ import { readFileSync } from 'fs';
 import { parse as parseJson } from 'jsonc-parser';
 import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
+import { TextEncoder } from 'util';
 import { Script } from 'vm';
 import { assertIsError } from '../../utilities/error';
 
@@ -40,6 +41,13 @@ function shouldWrapSchematic(schematicFile: string, schematicEncapsulation: bool
     normalizedSchematicFile.includes('node_modules/@angular/cli/') &&
     !normalizedSchematicFile.includes('node_modules/@angular/cli/node_modules/')
   ) {
+    return false;
+  }
+
+  // @angular/pwa uses dynamic imports which causes `[1]    2468039 segmentation fault` when wrapped.
+  // We should remove this when make `importModuleDynamically` work.
+  // See: https://nodejs.org/docs/latest-v14.x/api/vm.html
+  if (normalizedSchematicFile.includes('@angular/pwa')) {
     return false;
   }
 
@@ -211,6 +219,12 @@ function wrap(
     __dirname: schematicDirectory,
     __filename: schematicFile,
     Buffer,
+    // TextEncoder is used by the compiler to generate i18n message IDs. See:
+    // https://github.com/angular/angular/blob/main/packages/compiler/src/i18n/digest.ts#L17
+    // It is referenced globally, because it may be run either on the browser or the server.
+    // Usually Node exposes it globally, but in order for it to work, our custom context
+    // has to expose it too. Issue context: https://github.com/angular/angular/issues/48940.
+    TextEncoder,
     console,
     process,
     get global() {

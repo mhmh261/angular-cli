@@ -11,7 +11,7 @@ version: 2.1
 
 orbs:
   browser-tools: circleci/browser-tools@1.4.0
-  devinfra: angular/dev-infra@1.0.7
+  devinfra: angular/dev-infra@1.0.8
 
 parameters:
   snapshot_changed:
@@ -23,24 +23,31 @@ parameters:
 ## IMPORTANT
 # Windows needs its own cache key because binaries in node_modules are different.
 # See https://circleci.com/docs/2.0/caching/#restoring-cache for how prefixes work in CircleCI.
-var_1: &cache_key v1-angular_devkit-14.20-{{ checksum "yarn.lock" }}
-var_1_win: &cache_key_win v1-angular_devkit-win-16.13-{{ checksum "yarn.lock" }}
-var_3: &default_nodeversion '14.20'
-var_3_major: &default_nodeversion_major '14'
+var_1: &cache_key v1-angular_devkit-16.14-{{ checksum "yarn.lock" }}
+var_1_win: &cache_key_win v1-angular_devkit-win-16.14-{{ checksum "yarn.lock" }}
+var_3: &default_nodeversion '16.14'
+var_3_major: &default_nodeversion_major '16'
 # The major version of node toolchains. See tools/toolchain_info.bzl
 # NOTE: entries in this array may be repeated elsewhere in the file, find them before adding more
-var_3_all_major: &all_nodeversion_major ['14', '16']
+var_3_all_major: &all_nodeversion_major ['16', '18']
 # Workspace initially persisted by the `setup` job, and then enhanced by `setup-and-build-win`.
 # https://circleci.com/docs/2.0/workflows/#using-workspaces-to-share-data-among-jobs
 # https://circleci.com/blog/deep-diving-into-circleci-workspaces/
 var_4: &workspace_location .
 # Filter to only release branches on a given job.
-var_5: &only_release_branches
+var_5_only_releases: &only_release_branches
   filters:
     branches:
       only:
         - main
         - /\d+\.\d+\.x/
+var_5_only_snapshots: &only_snapshot_branches
+  filters:
+    branches:
+      only:
+        - main
+        # This is needed to run this steps on Renovate PRs that amend the snapshots package.json
+        - /^pull\/.*/
 
 var_6: &only_pull_requests
   filters:
@@ -48,6 +55,7 @@ var_6: &only_pull_requests
       only:
         - /pull\/\d+/
 
+# All e2e test suites
 var_7: &all_e2e_subsets ['npm', 'esbuild', 'yarn']
 
 # Executor Definitions
@@ -63,15 +71,25 @@ executors:
     working_directory: ~/ng
     resource_class: small
 
+  bazel-executor:
+    parameters:
+      nodeversion:
+        type: string
+        default: *default_nodeversion
+    docker:
+      - image: cimg/node:<< parameters.nodeversion >>-browsers
+    working_directory: ~/ng
+    resource_class: xlarge
+
   windows-executor:
     # Same as https://circleci.com/orbs/registry/orb/circleci/windows, but named.
     working_directory: ~/ng
-    resource_class: windows.medium
+    resource_class: windows.large
     shell: powershell.exe -ExecutionPolicy Bypass
     machine:
       # Contents of this image:
-      # https://circleci.com/docs/2.0/hello-world-windows/#software-pre-installed-in-the-windows-image
-      image: windows-server-2019-vs2019:stable
+      # https://circleci.com/developer/machine/image/windows-server-2022-gui
+      image: 'windows-server-2022-gui:current'
 
 # Command Definitions
 # https://circleci.com/docs/2.0/reusing-config/#authoring-reusable-commands
@@ -111,12 +129,13 @@ commands:
     steps:
       - attach_workspace:
           at: *workspace_location
+
   setup_windows:
     steps:
       - initialize_env
-      - run: nvm install 16.13
-      - run: nvm use 16.13
-      - run: npm install -g yarn@1.22.10
+      - run: nvm install 16.14.2
+      - run: nvm use 16.14.2
+      - run: npm install -g yarn@1.22.10 @bazel/bazelisk@${BAZELISK_VERSION}
       - run: node --version
       - run: yarn --version
 
@@ -126,17 +145,19 @@ commands:
         type: env_var_name
         default: CIRCLE_PROJECT_REPONAME
     steps:
-      - devinfra/setup-bazel-remote-exec:
-          bazelrc: ./.bazelrc.user
-
-  install_python:
-    steps:
       - run:
-          name: 'Install Python 2'
+          name: 'Copy Bazel RC'
+          shell: bash
           command: |
-            sudo apt-get update > /dev/null 2>&1
-            sudo apt-get install -y python
-            python --version
+            # Conditionally, copy bazel configuration based on the current VM
+            # operating system running. We detect Windows by checking for `%AppData%`.
+            if [[ -n "${APPDATA}" ]]; then
+              cp "./.circleci/bazel.windows.rc" ".bazelrc.user";
+            else
+              cp "./.circleci/bazel.linux.rc" ".bazelrc.user";
+            fi
+      - devinfra/setup-bazel-remote-exec:
+          shell: bash
 
 # Job definitions
 jobs:
@@ -159,12 +180,6 @@ jobs:
           key: *cache_key
           paths:
             - ~/.cache/yarn
-
-  lint:
-    executor: action-executor
-    steps:
-      - custom_attach_workspace
-      - run: yarn lint
 
   validate:
     executor: action-executor
@@ -190,111 +205,32 @@ jobs:
       - run: yarn -s admin validate
       - run: yarn -s check-tooling-setup
 
-  e2e-tests:
-    parameters:
-      nodeversion:
-        type: string
-        default: *default_nodeversion
-      snapshots:
-        type: boolean
-        default: false
-      subset:
-        type: enum
-        enum: *all_e2e_subsets
-        default: 'npm'
-    executor:
-      name: action-executor
-      nodeversion: << parameters.nodeversion >>
-    parallelism: 8
-    resource_class: large
-    steps:
-      - custom_attach_workspace
-      - browser-tools/install-chrome
-      - initialize_env
-      - run: mkdir /mnt/ramdisk/e2e
-      - when:
-          condition:
-            equal: ['npm', << parameters.subset >>]
-          steps:
-            - run:
-                name: Execute CLI E2E Tests with NPM
-                command: |
-                  node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX} <<# parameters.snapshots >>--ng-snapshots<</ parameters.snapshots >> --tmpdir=/mnt/ramdisk/e2e --ignore="tests/misc/browsers.ts"
-      - when:
-          condition:
-            equal: ['esbuild', << parameters.subset >>]
-          steps:
-            - run:
-                name: Execute CLI E2E Tests Subset with Esbuild
-                command: |
-                  node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX} <<# parameters.snapshots >>--ng-snapshots<</ parameters.snapshots >> --esbuild --tmpdir=/mnt/ramdisk/e2e --glob="{tests/basic/**,tests/build/prod-build.ts,tests/build/relative-sourcemap.ts,tests/build/styles/scss.ts,tests/build/styles/include-paths.ts,tests/commands/add/add-pwa.ts}" --ignore="tests/basic/{environment,rebuild,serve,scripts-array}.ts"
-      - when:
-          condition:
-            equal: ['yarn', << parameters.subset >>]
-          steps:
-            - run:
-                name: Execute CLI E2E Tests Subset with Yarn
-                command: |
-                  node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX} <<# parameters.snapshots >>--ng-snapshots<</ parameters.snapshots >> --yarn --tmpdir=/mnt/ramdisk/e2e --glob="{tests/basic/**,tests/update/**,tests/commands/add/**}"
-      - fail_fast
-
-  test-browsers:
-    executor:
-      name: action-executor
-    resource_class: medium
-    steps:
-      - custom_attach_workspace
-      - initialize_env
-      - run:
-          name: Initialize Saucelabs
-          command: setSecretVar SAUCE_ACCESS_KEY $(echo $SAUCE_ACCESS_KEY | rev)
-      - run:
-          name: Start Saucelabs Tunnel
-          command: ./scripts/saucelabs/start-tunnel.sh
-          background: true
-        # Waits for the Saucelabs tunnel to be ready. This ensures that we don't run tests
-        # too early without Saucelabs not being ready.
-      - run: ./scripts/saucelabs/wait-for-tunnel.sh
-      - run: node ./tests/legacy-cli/run_e2e --glob="tests/misc/browsers.ts"
-      - run: ./scripts/saucelabs/stop-tunnel.sh
-      - fail_fast
-
   build:
-    executor: action-executor
+    executor: bazel-executor
     steps:
       - custom_attach_workspace
-      - run: yarn build
-      - persist_to_workspace:
-          root: *workspace_location
-          paths:
-            - dist/_*.tgz
+      - setup_bazel_rbe
+      - run:
+          name: Bazel Build Packages
+          command: yarn bazel build //...
+      - fail_fast
 
-  build-bazel-e2e:
-    executor: action-executor
-    resource_class: medium
-    steps:
-      - custom_attach_workspace
-      - run: yarn bazel build //tests/legacy-cli/...
-
-  unit-test:
-    executor: action-executor
-    resource_class: xlarge
+  test:
+    executor: bazel-executor
     parameters:
       nodeversion:
         type: string
         default: *default_nodeversion_major
     steps:
       - custom_attach_workspace
-      - browser-tools/install-chrome
       - setup_bazel_rbe
-      - run: sudo cp .circleci/bazel.rc /etc/bazel.bazelrc
       - when:
           # The default nodeversion runs all *excluding* other versions
           condition:
             equal: [*default_nodeversion_major, << parameters.nodeversion >>]
           steps:
             - run:
-                command: yarn bazel test --test_tag_filters=-node16,-node<< parameters.nodeversion >>-broken //packages/...
+                command: yarn bazel test --test_tag_filters=-node18,-node<< parameters.nodeversion >>-broken //packages/...
                 # This timeout provides time for the actual tests to timeout and report status
                 # instead of CircleCI stopping the job without test failure information.
                 no_output_timeout: 40m
@@ -311,27 +247,74 @@ jobs:
                 no_output_timeout: 40m
       - fail_fast
 
+  e2e-tests:
+    executor: bazel-executor
+    parallelism: 8
+    parameters:
+      nodeversion:
+        type: string
+        default: *default_nodeversion
+      snapshots:
+        type: boolean
+        default: false
+      subset:
+        type: enum
+        enum: *all_e2e_subsets
+        default: 'npm'
+    steps:
+      - custom_attach_workspace
+      - initialize_env
+      - setup_bazel_rbe
+      - run: mkdir /mnt/ramdisk/e2e
+      - run:
+          name: Execute CLI E2E Tests with << parameters.subset >>
+          command: yarn bazel test --define=E2E_TEMP=/mnt/ramdisk/e2e --define=E2E_SHARD_TOTAL=${CIRCLE_NODE_TOTAL} --define=E2E_SHARD_INDEX=${CIRCLE_NODE_INDEX} --config=e2e //tests/legacy-cli:e2e<<# parameters.snapshots >>.snapshots<</ parameters.snapshots >>.<< parameters.subset >>_node<< parameters.nodeversion >>
+          no_output_timeout: 40m
+      - store_artifacts:
+          path: dist/testlogs/tests/legacy-cli/e2e<<# parameters.snapshots >>.snapshots<</ parameters.snapshots >>.<< parameters.subset >>_node<< parameters.nodeversion >>
+      - store_test_results:
+          path: dist/testlogs/tests/legacy-cli/e2e<<# parameters.snapshots >>.snapshots<</ parameters.snapshots >>.<< parameters.subset >>_node<< parameters.nodeversion >>
+      - fail_fast
+
+  test-browsers:
+    executor: bazel-executor
+    steps:
+      - custom_attach_workspace
+      - initialize_env
+      - setup_bazel_rbe
+      - run:
+          name: Initialize Saucelabs
+          command: setSecretVar SAUCE_ACCESS_KEY $(echo $SAUCE_ACCESS_KEY | rev)
+      - run:
+          name: Start Saucelabs Tunnel
+          command: ./scripts/saucelabs/start-tunnel.sh
+          background: true
+        # Waits for the Saucelabs tunnel to be ready. This ensures that we don't run tests
+        # too early without Saucelabs not being ready.
+      - run: ./scripts/saucelabs/wait-for-tunnel.sh
+      - run:
+          name: E2E Saucelabs Tests
+          command: yarn bazel test --config=saucelabs //tests/legacy-cli:e2e.saucelabs
+      - run: ./scripts/saucelabs/stop-tunnel.sh
+      - store_artifacts:
+          path: dist/testlogs/tests/legacy-cli/e2e.saucelabs
+      - store_test_results:
+          path: dist/testlogs/tests/legacy-cli/e2e.saucelabs
+      - fail_fast
+
   snapshot_publish:
     executor: action-executor
     resource_class: medium
     steps:
       - custom_attach_workspace
-      - install_python
-      - run:
-          name: Decrypt Credentials
-          # Note: when changing the image, you might have to re-encrypt the credentials with a
-          # matching version of openssl.
-          # See https://stackoverflow.com/a/43847627/2116927 for more info.
-          command: |
-            openssl aes-256-cbc -d -in .circleci/github_token -k "${KEY}" -out ~/github_token -md md5
       - run:
           name: Deployment to Snapshot
-          command: |
-            yarn admin snapshots --verbose --githubTokenFile=${HOME}/github_token
+          command: yarn admin snapshots --verbose
       - fail_fast
 
   publish_artifacts:
     executor: action-executor
+    resource_class: medium
     environment:
     steps:
       - custom_attach_workspace
@@ -342,7 +325,7 @@ jobs:
           name: Copy tarballs to folder
           command: |
             mkdir -p dist/artifacts/
-            cp dist/*.tgz dist/artifacts/
+            cp dist/releases/*.tgz dist/artifacts/
       - store_artifacts:
           path: dist/artifacts/
           destination: angular
@@ -350,11 +333,12 @@ jobs:
   # Windows jobs
   e2e-cli-win:
     executor: windows-executor
-    parallelism: 16
+    parallelism: 12
     steps:
       - checkout
-      - rebase_pr_win
       - setup_windows
+      - rebase_pr_win
+      - setup_bazel_rbe
       - restore_cache:
           keys:
             - *cache_key_win
@@ -364,7 +348,7 @@ jobs:
           name: 'Arsenal Image Mounter (RAM Disk)'
           command: |
             pwsh ./.circleci/win-ram-disk.ps1
-      - run: yarn install --frozen-lockfile --cache-folder ../.cache/yarn
+      - run: yarn install --frozen-lockfile --cache-folder ~/.cache/yarn
       - save_cache:
           key: *cache_key_win
           paths:
@@ -372,15 +356,23 @@ jobs:
             # Path where Arsenal Image Mounter files are downloaded.
             # Must match path in .circleci/win-ram-disk.ps1
             - ./aim
-      # Build the npm packages for the e2e tests
-      - run: yarn build
-      # Run partial e2e suite on PRs only. Release branches will run the full e2e suite.
       - run:
           name: Execute E2E Tests
+          environment:
+            # Required by `yarn ng-dev`
+            # See https://github.com/angular/angular/issues/46858
+            PWD: .
           command: |
-            mkdir X:/ramdisk/e2e-main
-            node tests\legacy-cli\run_e2e.js --nb-shards=$env:CIRCLE_NODE_TOTAL --shard=$env:CIRCLE_NODE_INDEX --tmpdir=X:/ramdisk/e2e-main --ignore="tests/misc/browsers.ts"
+            mkdir X:/ramdisk/e2e
+            bazel test --define=E2E_TEMP=X:/ramdisk/e2e --define=E2E_SHARD_TOTAL=$env:CIRCLE_NODE_TOTAL --define=E2E_SHARD_INDEX=$env:CIRCLE_NODE_INDEX --config=e2e //tests/legacy-cli:e2e.npm_node16
+          # This timeout provides time for the actual tests to timeout and report status
+          # instead of CircleCI stopping the job without test failure information.
+          no_output_timeout: 40m
       - fail_fast
+      - store_artifacts:
+          path: dist/testlogs/tests/legacy-cli/e2e.npm_node16
+      - store_test_results:
+          path: dist/testlogs/tests/legacy-cli/e2e.npm_node16
 
 workflows:
   version: 2
@@ -388,23 +380,31 @@ workflows:
     jobs:
       # Linux jobs
       - setup
-      - lint:
-          requires:
-            - setup
       - validate:
           requires:
             - setup
+
+      # These jobs only really depend on Setup, but the build job is very quick to run (~35s) and
+      # will catch any build errors before proceeding to the more lengthy and resource intensive
+      - test:
+          name: test-node<< matrix.nodeversion >>
+          matrix:
+            parameters:
+              # Disable running this on Node.js 18 for now. This causes failures when using RBE.
+              # Example: `GLIBC_2.28' not found.
+              # Likely this is caused by outdated Ubuntu image https://github.com/angular/dev-infra/blob/main/bazel/remote-execution/BUILD.bazel#L21
+              nodeversion: ['16']
+          requires:
+            - build
+
+      # Bazel jobs
       - build:
           requires:
             - setup
 
-      - test-browsers:
-          requires:
-            - build
-
       - e2e-tests:
           name: e2e-cli-<< matrix.subset >>
-          nodeversion: '14.20'
+          nodeversion: *default_nodeversion_major
           matrix:
             parameters:
               subset: *all_e2e_subsets
@@ -421,7 +421,7 @@ workflows:
           matrix:
             alias: e2e-cli
             parameters:
-              nodeversion: ['14.20', '16.13', '18.10']
+              nodeversion: *all_nodeversion_major
               subset: *all_e2e_subsets
           requires:
             - build
@@ -429,50 +429,32 @@ workflows:
 
       - e2e-tests:
           name: e2e-snapshots-<< matrix.subset >>
-          nodeversion: '16.13'
+          nodeversion: *default_nodeversion_major
           matrix:
             parameters:
               subset: *all_e2e_subsets
           snapshots: true
           pre-steps:
             - when:
+                # Don't run snapshot E2E's unless it's on the main branch or the snapshots file has been updated.
                 condition:
                   and:
                     - not:
                         equal: [main, << pipeline.git.branch >>]
                     - not: << pipeline.parameters.snapshot_changed >>
                 steps:
-                  # Don't run snapshot E2E's unless it's on the main branch or the snapshots file has been updated.
                   - run: circleci-agent step halt
           requires:
             - build
-          filters:
-            branches:
-              only:
-                - main
-                # This is needed to run this steps on Renovate PRs that amend the snapshots package.json
-                - /^pull\/.*/
+          <<: *only_snapshot_branches
 
-      # Bazel jobs
-      # These jobs only really depend on Setup, but the build job is very quick to run (~35s) and
-      # will catch any build errors before proceeding to the more lengthy and resource intensive
-      # Bazel jobs.
-      - unit-test:
-          name: test-node<< matrix.nodeversion >>
-          matrix:
-            parameters:
-              nodeversion: *all_nodeversion_major
-          requires:
-            - build
-
-      # Compile the e2e tests with bazel to ensure the non-runtime typescript
-      # compilation completes succesfully.
-      - build-bazel-e2e:
+      - test-browsers:
           requires:
             - build
 
       # Windows jobs
-      - e2e-cli-win
+      - e2e-cli-win:
+          <<: *only_release_branches
 
       # Publish jobs
       - snapshot_publish:

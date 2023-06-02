@@ -14,7 +14,9 @@ import { ProcessOutput, createConsoleLogger } from '@angular-devkit/core/node';
 import { UnsuccessfulWorkflowExecution } from '@angular-devkit/schematics';
 import { NodeWorkflow } from '@angular-devkit/schematics/tools';
 import * as ansiColors from 'ansi-colors';
+import { existsSync } from 'fs';
 import * as inquirer from 'inquirer';
+import * as path from 'path';
 import yargsParser, { camelCase, decamelize } from 'yargs-parser';
 
 /**
@@ -77,6 +79,32 @@ function _createPromptProvider(): schema.PromptProvider {
       const validator = definition.validator;
       if (validator) {
         question.validate = (input) => validator(input);
+
+        // Filter allows transformation of the value prior to validation
+        question.filter = async (input) => {
+          for (const type of definition.propertyTypes) {
+            let value;
+            switch (type) {
+              case 'string':
+                value = String(input);
+                break;
+              case 'integer':
+              case 'number':
+                value = Number(input);
+                break;
+              default:
+                value = input;
+                break;
+            }
+            // Can be a string if validation fails
+            const isValid = (await validator(value)) === true;
+            if (isValid) {
+              return value;
+            }
+          }
+
+          return input;
+        };
       }
 
       switch (definition.type) {
@@ -106,6 +134,45 @@ function _createPromptProvider(): schema.PromptProvider {
 
     return inquirer.prompt(questions);
   };
+}
+
+function findUp(names: string | string[], from: string) {
+  if (!Array.isArray(names)) {
+    names = [names];
+  }
+  const root = path.parse(from).root;
+
+  let currentDir = from;
+  while (currentDir && currentDir !== root) {
+    for (const name of names) {
+      const p = path.join(currentDir, name);
+      if (existsSync(p)) {
+        return p;
+      }
+    }
+
+    currentDir = path.dirname(currentDir);
+  }
+
+  return null;
+}
+
+/**
+ * return package manager' name by lock file
+ */
+function getPackageManagerName() {
+  // order by check priority
+  const LOCKS: Record<string, string> = {
+    'package-lock.json': 'npm',
+    'yarn.lock': 'yarn',
+    'pnpm-lock.yaml': 'pnpm',
+  };
+  const lockPath = findUp(Object.keys(LOCKS), process.cwd());
+  if (lockPath) {
+    return LOCKS[path.basename(lockPath)];
+  }
+
+  return 'npm';
 }
 
 // eslint-disable-next-line max-lines-per-function
@@ -155,6 +222,7 @@ export async function main({
     dryRun,
     resolvePaths: [process.cwd(), __dirname],
     schemaValidation: true,
+    packageManager: getPackageManagerName(),
   });
 
   /** If the user wants to list schematics, we simply show all the schematic names. */

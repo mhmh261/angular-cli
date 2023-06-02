@@ -76,7 +76,7 @@ function generateBundleStats(info: {
   };
 }
 
-function generateBuildStatsTable(
+export function generateBuildStatsTable(
   data: BundleStats[],
   colors: boolean,
   showTotalSize: boolean,
@@ -118,6 +118,19 @@ function generateBuildStatsTable(
       }
     }
   }
+
+  // Sort descending by raw size
+  data.sort((a, b) => {
+    if (a.stats[2] > b.stats[2]) {
+      return -1;
+    }
+
+    if (a.stats[2] < b.stats[2]) {
+      return 1;
+    }
+
+    return 0;
+  });
 
   for (const { initial, stats } of data) {
     const [files, names, rawSize, estimatedTransferSize] = stats;
@@ -274,19 +287,6 @@ function statsToString(
 
   runsCache.add(json.outputPath || '');
 
-  // Sort chunks by size in descending order
-  changedChunksStats.sort((a, b) => {
-    if (a.stats[2] > b.stats[2]) {
-      return -1;
-    }
-
-    if (a.stats[2] < b.stats[2]) {
-      return 1;
-    }
-
-    return 0;
-  });
-
   const statsTable = generateBuildStatsTable(
     changedChunksStats,
     colors,
@@ -412,9 +412,9 @@ export function statsErrorsToString(
       // In most cases webpack will add stack traces to error messages.
       // This below cleans up the error from stacks.
       // See: https://github.com/webpack/webpack/issues/15980
-      const message = statsConfig.errorStack
-        ? error.message
-        : /[\s\S]+?(?=\n+\s+at\s)/.exec(error.message)?.[0] ?? error.message;
+      const index = error.message.search(/[\n\s]+at /);
+      const message =
+        statsConfig.errorStack || index === -1 ? error.message : error.message.substring(0, index);
 
       if (!/^error/i.test(message)) {
         output += r('Error: ');

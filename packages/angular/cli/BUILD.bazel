@@ -17,11 +17,12 @@ ts_library(
     name = "angular-cli",
     package_name = "@angular/cli",
     srcs = glob(
-        include = ["**/*.ts"],
+        include = [
+            "lib/**/*.ts",
+            "src/**/*.ts",
+        ],
         exclude = [
             "**/*_spec.ts",
-            # NB: we need to exclude the nested node_modules that is laid out by yarn workspaces
-            "node_modules/**",
         ],
     ) + [
         # @external_begin
@@ -33,12 +34,10 @@ ts_library(
     data = glob(
         include = [
             "bin/**/*",
-            "**/*.json",
-            "**/*.md",
+            "src/**/*.md",
+            "src/**/*.json",
         ],
         exclude = [
-            # NB: we need to exclude the nested node_modules that is laid out by yarn workspaces
-            "node_modules/**",
             "lib/config/workspace-schema.json",
         ],
     ) + [
@@ -85,6 +84,7 @@ CLI_SCHEMA_DATA = [
     "//packages/angular_devkit/build_angular:src/builders/browser-esbuild/schema.json",
     "//packages/angular_devkit/build_angular:src/builders/dev-server/schema.json",
     "//packages/angular_devkit/build_angular:src/builders/extract-i18n/schema.json",
+    "//packages/angular_devkit/build_angular:src/builders/jest/schema.json",
     "//packages/angular_devkit/build_angular:src/builders/karma/schema.json",
     "//packages/angular_devkit/build_angular:src/builders/ng-packagr/schema.json",
     "//packages/angular_devkit/build_angular:src/builders/protractor/schema.json",
@@ -142,7 +142,6 @@ ts_library(
         "//packages/angular_devkit/schematics",
         "//packages/angular_devkit/schematics/testing",
         "@npm//@types/semver",
-        "@npm//rxjs",
     ],
 )
 
@@ -176,6 +175,7 @@ pkg_npm(
         "//packages/angular_devkit/schematics:package.json",
         "//packages/schematics/angular:package.json",
     ],
+    tags = ["release-package"],
     deps = [
         ":README.md",
         ":angular-cli",

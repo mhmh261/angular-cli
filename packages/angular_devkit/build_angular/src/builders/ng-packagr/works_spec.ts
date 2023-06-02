@@ -17,7 +17,7 @@ import {
   virtualFs,
   workspaces,
 } from '@angular-devkit/core';
-import { debounceTime, map, take, tap } from 'rxjs/operators';
+import { debounceTime, map, take, tap } from 'rxjs';
 
 // Default timeout for large specs is 2.5 minutes.
 jasmine.DEFAULT_TIMEOUT_INTERVAL = 150000;
@@ -56,9 +56,9 @@ describe('NgPackagr Builder', () => {
 
     await run.stop();
 
-    expect(host.scopedSync().exists(normalize('./dist/lib/fesm2015/lib.mjs'))).toBe(true);
+    expect(host.scopedSync().exists(normalize('./dist/lib/fesm2022/lib.mjs'))).toBe(true);
     const content = virtualFs.fileBufferToString(
-      host.scopedSync().read(normalize('./dist/lib/fesm2015/lib.mjs')),
+      host.scopedSync().read(normalize('./dist/lib/fesm2022/lib.mjs')),
     );
     expect(content).toContain('lib works');
 
@@ -90,7 +90,7 @@ describe('NgPackagr Builder', () => {
         tap((buildEvent) => expect(buildEvent.success).toBe(true)),
         debounceTime(1000),
         map(() => {
-          const fileName = './dist/lib/fesm2015/lib.mjs';
+          const fileName = './dist/lib/fesm2022/lib.mjs';
           const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
 
           return content;

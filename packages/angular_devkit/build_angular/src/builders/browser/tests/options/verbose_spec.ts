@@ -7,7 +7,7 @@
  */
 
 import { logging } from '@angular-devkit/core';
-import { concatMap, count, take, timeout } from 'rxjs/operators';
+import { concatMap, count, take, timeout } from 'rxjs';
 import { BUILD_TIMEOUT, buildWebpackBrowser } from '../../index';
 import { BASE_OPTIONS, BROWSER_BUILDER_INFO, describeBuilder } from '../setup';
 
@@ -117,7 +117,7 @@ describeBuilder(buildWebpackBrowser, BROWSER_BUILDER_INFO, (harness) => {
       expect(result?.success).toBeFalse();
       expect(logs).toContain(
         jasmine.objectContaining<logging.LogEntry>({
-          message: jasmine.stringMatching(`SassError: Can't find stylesheet to import.`),
+          message: jasmine.stringMatching(`Can't find stylesheet to import`),
         }),
       );
       expect(logs).not.toContain(

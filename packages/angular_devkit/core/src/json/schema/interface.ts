@@ -7,7 +7,7 @@
  */
 
 import { ErrorObject, Format } from 'ajv';
-import { Observable, SubscribableOrPromise } from 'rxjs';
+import { Observable, ObservableInput } from 'rxjs';
 import { JsonArray, JsonObject, JsonValue } from '../utils';
 
 export type JsonPointer = string & {
@@ -28,7 +28,7 @@ export interface SchemaValidatorOptions {
 }
 
 export interface SchemaValidator {
-  (data: JsonValue, options?: SchemaValidatorOptions): Observable<SchemaValidatorResult>;
+  (data: JsonValue, options?: SchemaValidatorOptions): Promise<SchemaValidatorResult>;
 }
 
 export type SchemaFormatter = Format;
@@ -69,16 +69,13 @@ export interface PromptDefinition {
 
 export type PromptProvider = (
   definitions: Array<PromptDefinition>,
-) => SubscribableOrPromise<{ [id: string]: JsonValue }>;
+) => ObservableInput<{ [id: string]: JsonValue }>;
 
 export interface SchemaRegistry {
-  compile(schema: Object): Observable<SchemaValidator>;
-  /**
-   * @deprecated since 11.2 without replacement.
-   * Producing a flatten schema document does not in all cases produce a schema with identical behavior to the original.
-   * See: https://json-schema.org/draft/2019-09/json-schema-core.html#rfc.appendix.B.2
-   */
-  flatten(schema: JsonObject | string): Observable<JsonObject>;
+  compile(schema: Object): Promise<SchemaValidator>;
+
+  /** @private */
+  ɵflatten(schema: JsonObject | string): Promise<JsonObject>;
   addFormat(format: SchemaFormat): void;
   addSmartDefaultProvider<T>(source: string, provider: SmartDefaultProvider<T>): void;
   usePromptProvider(provider: PromptProvider): void;

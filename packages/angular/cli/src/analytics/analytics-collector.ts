@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto';
 import * as https from 'https';
 import * as os from 'os';
 import * as querystring from 'querystring';
+import * as semver from 'semver';
 import type { CommandContext } from '../command-builder/command-module';
 import { ngDebug } from '../utilities/environment-options';
 import { assertIsError } from '../utilities/error';
@@ -44,16 +45,21 @@ export class AnalyticsCollector {
       [RequestParameter.SessionId]: randomUUID(),
       [RequestParameter.UserAgentArchitecture]: os.arch(),
       [RequestParameter.UserAgentPlatform]: os.platform(),
-      [RequestParameter.UserAgentPlatformVersion]: os.version(),
-
-      // Set undefined to disable debug view.
-      [RequestParameter.DebugView]: ngDebug ? 1 : undefined,
+      [RequestParameter.UserAgentPlatformVersion]: os.release(),
+      [RequestParameter.UserAgentMobile]: 0,
+      [RequestParameter.SessionEngaged]: 1,
+      // The below is needed for tech details to be collected.
+      [RequestParameter.UserAgentFullVersionList]:
+        'Google%20Chrome;111.0.5563.64|Not(A%3ABrand;8.0.0.0|Chromium;111.0.5563.64',
     };
+
+    if (ngDebug) {
+      requestParameters[RequestParameter.DebugView] = 1;
+    }
 
     this.requestParameterStringified = querystring.stringify(requestParameters);
 
-    // Remove the `v` at the beginning.
-    const nodeVersion = process.version.substring(1);
+    const parsedVersion = semver.parse(process.version);
     const packageManagerVersion = context.packageManager.version;
 
     this.userParameters = {
@@ -62,8 +68,10 @@ export class AnalyticsCollector {
       [UserCustomDimension.OsArchitecture]: os.arch(),
       // While User ID is being collected by GA, this is not visible in reports/for filtering.
       [UserCustomDimension.UserId]: userId,
-      [UserCustomDimension.NodeVersion]: nodeVersion,
-      [UserCustomDimension.NodeMajorVersion]: +nodeVersion.split('.', 1)[0],
+      [UserCustomDimension.NodeVersion]: parsedVersion
+        ? `${parsedVersion.major}.${parsedVersion.minor}.${parsedVersion.patch}`
+        : 'other',
+      [UserCustomDimension.NodeMajorVersion]: parsedVersion?.major,
       [UserCustomDimension.PackageManager]: context.packageManager.name,
       [UserCustomDimension.PackageManagerVersion]: packageManagerVersion,
       [UserCustomDimension.PackageManagerMajorVersion]: packageManagerVersion
@@ -161,19 +169,22 @@ export class AnalyticsCollector {
   }
 
   private async send(data: Record<string, PrimitiveTypes | undefined>[]): Promise<void> {
-    // Temporarily disable sending analytics.
-    if (true as boolean) {
-      return Promise.resolve();
-    }
-
     return new Promise<void>((resolve, reject) => {
       const request = https.request(
         {
           host: 'www.google-analytics.com',
           method: 'POST',
           path: '/g/collect?' + this.requestParameterStringified,
+          headers: {
+            // The below is needed for tech details to be collected even though we provide our own information from the OS Node.js module
+            'user-agent':
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
+          },
         },
         (response) => {
+          // The below is needed as otherwise the response will never close which will cause the CLI not to terminate.
+          response.on('data', () => {});
+
           if (response.statusCode !== 200 && response.statusCode !== 204) {
             reject(
               new Error(`Analytics reporting failed with status code: ${response.statusCode}.`),

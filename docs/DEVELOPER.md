@@ -6,7 +6,7 @@ To get started locally, follow these instructions:
 
 1. If you haven't done it already, [make a fork of this repo](https://github.com/angular/angular-cli/fork).
 1. Clone to your local computer using `git`.
-1. Make sure that you have Node `v14.20`, `v16.13` or `v18.10` installed. See instructions [here](https://nodejs.org/en/download/).
+1. Make sure that you have Node `v14.20`, `v16.14` or `v18.10` installed. See instructions [here](https://nodejs.org/en/download/).
 1. Make sure that you have `yarn` installed; see instructions [here](https://yarnpkg.com/lang/en/docs/install/).
 1. Run `yarn` (no arguments) from the root of your clone of this project to install dependencies.
 
@@ -78,21 +78,21 @@ There are two different test suites which can be run locally:
 - Run a subset of the tests, use the full Bazel target example: `yarn bazel test //packages/schematics/angular:angular_test`
 - For a complete list of test targets use the following Bazel query: `yarn bazel query "tests(//packages/...)"`
 
+When debugging a specific test, change `describe()` or `it()` to `fdescribe()`
+and `fit()` to focus execution to just that one test. This will keep the output clean and speed up execution by not running irrelevant tests.
+
 You can find more info about debugging [tests with Bazel in the docs.](https://github.com/angular/angular-cli/blob/main/docs/process/bazel.md#debugging-jasmine_node_test)
 
 ### End to end tests
 
-- Compile the packages being tested: `yarn build`
-- Run all tests: `node tests/legacy-cli/run_e2e.js`
-- Run a subset of the tests: `node tests/legacy-cli/run_e2e.js tests/legacy-cli/e2e/tests/i18n/ivy-localize-*`
-- Run on a custom set of npm packages (tar files): `node tests/legacy-cli/run_e2e.js --package _angular_cli.tgz _angular_create.tgz dist/*.tgz ...`
+- For a complete list of test targets use the following Bazel query: `yarn bazel query "tests(//tests/...)"`
+- Run a subset of the tests: `yarn bazel test //tests/legacy-cli:e2e_node16 --test_filter="tests/i18n/ivy-localize-*"`
+- Use `bazel run` to debug failing tests debugging: `yarn bazel run //tests/legacy-cli:e2e_node16 --test_arg="--glob=tests/basic/aot.ts"`
+- Provide additional `e2e_runner` options using `--test_arg`: `--test_arg="--yarn"`
 
 When running the debug commands, Node will stop and wait for a debugger to attach.
 You can attach your IDE to the debugger to stop on breakpoints and step through the code. Also, see [IDE Specific Usage](#ide-specific-usage) for a
 simpler debug story.
-
-When debugging a specific test, change `describe()` or `it()` to `fdescribe()`
-and `fit()` to focus execution to just that one test. This will keep the output clean and speed up execution by not running irrelevant tests.
 
 ## IDE Specific Usage
 

@@ -12,7 +12,7 @@
   "dependencyDashboard": true,
   "schedule": ["after 10:00pm every weekday", "before 4:00am every weekday", "every weekend"],
   "baseBranches": ["main"],
-  "ignoreDeps": ["@types/node", "quicktype-core"],
+  "ignoreDeps": ["@types/node", "rules_pkg", "less-loader"],
   "includePaths": [
     "WORKSPACE",
     "package.json",
@@ -21,6 +21,10 @@
     ".github/workflows/**/*.yml"
   ],
   "packageRules": [
+    {
+      "matchPackageNames": ["quicktype-core"],
+      "schedule": ["before 4:00am on the first day of the month"]
+    },
     {
       "groupName": "angular",
       "matchPackagePatterns": ["^@angular/.*", "angular/dev-infra"]
