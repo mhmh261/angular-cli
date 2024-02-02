@@ -178,7 +178,7 @@
     "picomatch": "2.3.1",
     "piscina": "3.2.0",
     "popper.js": "^1.14.1",
-    "postcss": "8.4.24",
+    "postcss": "8.4.31",
     "postcss-loader": "7.3.2",
     "prettier": "^2.0.0",
     "protractor": "~7.0.0",
